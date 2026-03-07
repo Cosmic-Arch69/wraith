@@ -110,7 +110,7 @@ Temporal UI: `http://localhost:8233`
 > **In active development.** Spring break 2026 (Mar 14-21) = main build window.
 
 - [x] Phase 1: Foundation -- compiles, MCP wired, CLI, GitHub (Mar 7)
-- [ ] Phase 2: Complete all 9 agent prompts
+- [x] Phase 2: Complete all 9 agent prompts
 - [ ] Phase 3: Docker boot + Temporal worker test
 - [ ] Phase 4: Recon agent vs live lab
 - [ ] Phase 5: Full kill chain end-to-end

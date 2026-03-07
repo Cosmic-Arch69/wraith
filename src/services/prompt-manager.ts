@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-const PROMPTS_DIR = process.env.HAVOC_PROMPTS_DIR ?? './prompts';
+const PROMPTS_DIR = process.env.WRAITH_PROMPTS_DIR ?? './prompts';
 
 export async function loadPrompt(
   templateName: string,

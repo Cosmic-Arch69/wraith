@@ -32,6 +32,7 @@ async function main() {
       if (cli.dryRun) {
         console.log('\n  [dry-run] Validating prompts...');
         for (const [name, agent] of Object.entries(AGENTS)) {
+          const firstWebHost = config.target.hosts.find(h => h.web_url);
           const prompt = await loadPrompt(agent.promptTemplate, {
             domain: config.target.domain,
             dc: config.target.dc,
@@ -41,6 +42,12 @@ async function main() {
             randomize: String(config.attack.randomize),
             delayMin: String(config.attack.delay_min_sec),
             delayMax: String(config.attack.delay_max_sec),
+            web_host: firstWebHost?.ip ?? '',
+            web_url: firstWebHost?.web_url ?? '',
+            domain_user: config.target.credentials.domain_user,
+            domain_pass: config.target.credentials.domain_pass,
+            web_dvwa_user: config.target.credentials.web_dvwa_user ?? 'admin',
+            web_dvwa_pass: config.target.credentials.web_dvwa_pass ?? 'password',
           });
           const unresolved = prompt.match(/\{\{[^}]+\}\}/g);
           const status = unresolved ? `WARN (unresolved: ${unresolved.join(', ')})` : 'OK';

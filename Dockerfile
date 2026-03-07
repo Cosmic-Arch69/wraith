@@ -1,4 +1,4 @@
-# Havoc worker -- Kali-based for ARM64 (Parallels on Apple Silicon)
+# Wraith worker -- Kali-based for ARM64 (Parallels on Apple Silicon)
 # Includes full pentesting toolset
 
 FROM kalilinux/kali-rolling
@@ -33,8 +33,8 @@ COPY dist/ ./dist/
 COPY prompts/ ./prompts/
 
 # Non-root user
-RUN groupadd -r havoc && useradd -r -g havoc -u 1001 havoc
-RUN chown -R havoc:havoc /app
-USER havoc
+RUN groupadd -r wraith && useradd -r -g wraith -u 1001 wraith
+RUN chown -R wraith:wraith /app
+USER wraith
 
 ENTRYPOINT ["node", "dist/temporal/worker.js"]

@@ -1,0 +1,4 @@
+node_modules/
+attack-logs/
+.env
+dist/

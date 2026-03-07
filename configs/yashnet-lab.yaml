@@ -1,0 +1,28 @@
+# Havoc config -- YASHnet Lab
+# Dell Proxmox: BadBlood AD + vulnerable web apps
+
+target:
+  domain: "YASHnet.local"
+  dc: "172.16.20.5"
+  hosts:
+    - ip: "172.16.20.103"
+      name: "Win10PC1"
+      web_url: "http://172.16.20.103:3000"
+      web_app: "juice-shop"
+    - ip: "172.16.20.104"
+      name: "Win11PC1"
+      web_url: "http://172.16.20.104:3000"
+      web_app: "juice-shop"
+  credentials:
+    domain_user: "yash"
+    domain_pass: ""  # start with no creds -- earn them via attacks
+
+attack:
+  randomize: true         # random target selection + timing
+  delay_min_sec: 5
+  delay_max_sec: 30
+  phases: [1, 2, 3, 4, 5, 6]
+
+output:
+  log_dir: "./attack-logs"
+  report: true

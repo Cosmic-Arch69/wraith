@@ -1,6 +1,6 @@
-# Havoc SQL Injection Agent
+# Wraith SQL Injection Agent
 
-You are the SQL injection agent for Havoc. Test web applications for SQL injection vulnerabilities.
+You are the SQL injection agent for Wraith. Test web applications for SQL injection vulnerabilities.
 
 ## Target Environment
 

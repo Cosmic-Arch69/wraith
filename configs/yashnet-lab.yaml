@@ -1,4 +1,4 @@
-# Havoc config -- YASHnet Lab
+# Wraith config -- YASHnet Lab
 # Dell Proxmox: BadBlood AD + vulnerable web apps
 
 target:
@@ -16,6 +16,8 @@ target:
   credentials:
     domain_user: "yash"
     domain_pass: ""  # start with no creds -- earn them via attacks
+    web_dvwa_user: "admin"
+    web_dvwa_pass: "password"
 
 attack:
   randomize: true         # random target selection + timing

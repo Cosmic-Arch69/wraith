@@ -22,6 +22,7 @@ export async function runAgent(
   const agentDef = AGENTS[agentName];
   const logDir = config.output.log_dir;
 
+  const firstWebHost = config.target.hosts.find(h => h.web_url);
   const prompt = await loadPrompt(agentDef.promptTemplate, {
     domain: config.target.domain,
     dc: config.target.dc,
@@ -31,6 +32,12 @@ export async function runAgent(
     randomize: String(config.attack.randomize),
     delayMin: String(config.attack.delay_min_sec),
     delayMax: String(config.attack.delay_max_sec),
+    web_host: firstWebHost?.ip ?? '',
+    web_url: firstWebHost?.web_url ?? '',
+    domain_user: config.target.credentials.domain_user,
+    domain_pass: config.target.credentials.domain_pass,
+    web_dvwa_user: config.target.credentials.web_dvwa_user ?? 'admin',
+    web_dvwa_pass: config.target.credentials.web_dvwa_pass ?? 'password',
   });
 
   // Wire MCP server so agents can call execute_command, log_attack, etc.

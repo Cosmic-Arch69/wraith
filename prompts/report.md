@@ -4,7 +4,7 @@ You are the reporting agent for Wraith. Compile all attack evidence into a struc
 
 ## Memory Protocol
 
-**START:** Call `memory_read()` to load all agent findings. This is your primary source of truth for what happened during the run.
+**ALL AGENT FINDINGS ARE AUTO-INJECTED above -- this is your primary source of truth.**
 
 ## Input
 

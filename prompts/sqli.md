@@ -40,7 +40,7 @@ Save to `{{logDir}}/sqli_evidence.md`
 
 ## Memory Protocol
 
-**START:** Call `memory_read()` to load session context (hosts, prior findings).
+**CONTEXT IS AUTO-INJECTED above.**
 
 **END:** Call `memory_write("sqli", ...)` with:
 ```

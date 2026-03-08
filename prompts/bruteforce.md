@@ -101,7 +101,7 @@ If the kerberoast phase already created `cracked_creds.json`, append to it rathe
 
 ## Memory Protocol
 
-**START:** Call `memory_read()` to load session context. Check kerberoast memory for already-cracked creds before spraying.
+**CONTEXT IS AUTO-INJECTED above.** Check kerberoast memory for already-cracked creds before spraying.
 
 **END:** Call `memory_write("bruteforce", ...)` with:
 ```

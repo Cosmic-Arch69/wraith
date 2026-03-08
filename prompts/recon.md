@@ -76,7 +76,7 @@ Log each recon action with `log_attack`:
 
 ## Memory Protocol
 
-**START:** Call `memory_read()` (no args) to load all session context from prior agents.
+**CONTEXT IS AUTO-INJECTED above -- do not call memory_read on startup.**
 
 **DURING:** Call `memory_append("session", ...)` if SOAR blocks you or you discover something critical.
 

@@ -1,7 +1,7 @@
 // Wraith direct runner -- no Temporal required
 // Executes the agent DAG in-process: sequential phases + parallel where safe
 
-import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { readFileSync, mkdirSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import yaml from 'js-yaml';
@@ -13,6 +13,24 @@ import { loadPrompt } from './services/prompt-manager.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const MCP_SERVER_PATH = join(__dirname, 'mcp', 'server.js');
+
+// Read all memory files and inject them into the prompt -- vault pattern.
+// Memory is always present at agent start, no tool call required.
+function loadMemoryContext(logDir: string): string {
+  const memDir = join(logDir, 'memory');
+  if (!existsSync(memDir)) return '';
+  try {
+    const files = readdirSync(memDir).filter(f => f.endsWith('.md'));
+    if (files.length === 0) return '';
+    const contents = files.map(f => {
+      const name = f.replace('.md', '');
+      return `### ${name}\n${readFileSync(join(memDir, f), 'utf-8').trim()}`;
+    }).join('\n\n');
+    return `## Session Memory (auto-injected -- always current)\n\n${contents}\n\n---\n\n`;
+  } catch {
+    return '';
+  }
+}
 
 export async function runAgent(
   agentName: AgentName,
@@ -48,8 +66,12 @@ export async function runAgent(
     },
   };
 
+  // Inject session memory at the top of every prompt -- survives context compression
+  const memory = loadMemoryContext(logDir);
+  const fullPrompt = memory ? `${memory}${prompt}` : prompt;
+
   console.log(`[${agentName}] Starting...`);
-  const result = await claudeRun(prompt, agentName, agentDef.modelTier ?? 'medium', mcpServers);
+  const result = await claudeRun(fullPrompt, agentName, agentDef.modelTier ?? 'medium', mcpServers);
   console.log(`[${agentName}] ${result.success ? 'Complete' : 'Failed'} (${result.duration}ms, ${result.turns ?? 0} turns)`);
 
   return { success: result.success, result: result.result };

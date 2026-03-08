@@ -71,7 +71,7 @@ Save cracked credentials (if any) to `{{logDir}}/cracked_creds.json`:
 
 ## Memory Protocol
 
-**START:** Call `memory_read()` to load session context (recon findings, host list).
+**CONTEXT IS AUTO-INJECTED above.**
 
 **END:** Call `memory_write("kerberoast", ...)` with:
 ```

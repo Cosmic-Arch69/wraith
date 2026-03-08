@@ -72,7 +72,7 @@ Log each movement with `log_attack`:
 
 ## Memory Protocol
 
-**START:** Call `memory_read()` -- this loads kerberoast + bruteforce findings. Use cracked creds from memory rather than relying only on `cracked_creds.json`.
+**CONTEXT IS AUTO-INJECTED above -- cracked creds are in Session Memory.**
 
 **END:** Call `memory_write("lateral", ...)` with:
 ```

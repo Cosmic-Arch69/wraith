@@ -97,7 +97,7 @@ Save evidence to `{{logDir}}/auth_attack_evidence.md`:
 
 ## Memory Protocol
 
-**START:** Call `memory_read()` to load session context.
+**CONTEXT IS AUTO-INJECTED above.**
 
 **END:** Call `memory_write("auth-attack", ...)` with:
 ```

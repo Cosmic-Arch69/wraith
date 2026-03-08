@@ -63,7 +63,7 @@ Log each with `log_attack`, save evidence to `{{logDir}}/privesc_evidence.md`.
 
 ## Memory Protocol
 
-**START:** Call `memory_read()` -- loads lateral movement findings + all cracked creds. Use admin creds from memory.
+**CONTEXT IS AUTO-INJECTED above -- use admin creds from Session Memory.**
 
 **END:** Call `memory_write("privesc", ...)` with:
 ```

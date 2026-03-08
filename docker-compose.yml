@@ -1,3 +1,6 @@
+# Wraith -- optional Temporal server for enterprise/distributed use
+# Not required for solo use: just run `node dist/index.js run`
+
 services:
   temporal:
     image: temporalio/temporal:latest
@@ -13,27 +16,6 @@ services:
       timeout: 5s
       retries: 10
       start_period: 30s
-
-  worker:
-    build: .
-    entrypoint: ["node", "dist/temporal/worker.js"]
-    network_mode: host   # needs to reach 172.16.20.0/24 via host routes
-    environment:
-      - TEMPORAL_ADDRESS=localhost:7233
-      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - ANTHROPIC_SMALL_MODEL=${ANTHROPIC_SMALL_MODEL:-}
-      - ANTHROPIC_MEDIUM_MODEL=${ANTHROPIC_MEDIUM_MODEL:-}
-      - ANTHROPIC_LARGE_MODEL=${ANTHROPIC_LARGE_MODEL:-}
-      - CLAUDE_CODE_MAX_OUTPUT_TOKENS=${CLAUDE_CODE_MAX_OUTPUT_TOKENS:-64000}
-      - WRAITH_LOG_DIR=/app/attack-logs
-    depends_on:
-      temporal:
-        condition: service_healthy
-    volumes:
-      - ./configs:/app/configs:ro
-      - ./prompts:/app/prompts:ro
-      - ./attack-logs:/app/attack-logs
 
 volumes:
   temporal-data:

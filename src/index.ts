@@ -1,12 +1,11 @@
 #!/usr/bin/env node
-// Wraith CLI entry point
+// Wraith CLI entry point -- no external services required
 
 import 'dotenv/config';
-import { readFileSync, existsSync } from 'node:fs';
-import { createReadStream } from 'node:fs';
+import { readFileSync, existsSync, createReadStream } from 'node:fs';
 import { join } from 'node:path';
 import { parseCli, printUsage } from './cli.js';
-import { connectTemporal, startWraithWorkflow, getWorkflowStatus } from './temporal/client.js';
+import { runWorkflow } from './runner.js';
 import { loadPrompt } from './services/prompt-manager.js';
 import { AGENTS } from './session-manager.js';
 import type { WraithConfig } from './types/index.js';
@@ -31,8 +30,8 @@ async function main() {
 
       if (cli.dryRun) {
         console.log('\n  [dry-run] Validating prompts...');
+        const firstWebHost = config.target.hosts.find(h => h.web_url);
         for (const [name, agent] of Object.entries(AGENTS)) {
-          const firstWebHost = config.target.hosts.find(h => h.web_url);
           const prompt = await loadPrompt(agent.promptTemplate, {
             domain: config.target.domain,
             dc: config.target.dc,
@@ -57,32 +56,36 @@ async function main() {
         return;
       }
 
-      console.log('\n  Connecting to Temporal...');
-      const { client } = await connectTemporal();
-      const workflowId = await startWraithWorkflow(client, cli.config);
-      console.log(`  Workflow started: ${workflowId}`);
-      console.log(`  Temporal UI:     http://localhost:8233`);
-      console.log(`  Status:          wraith status --workflow-id ${workflowId}`);
-      console.log(`  Logs:            wraith logs --follow`);
-      console.log(`  Attack log:      ${config.output.log_dir}/attacks.jsonl\n`);
+      await runWorkflow(cli.config);
       break;
     }
 
     case 'status': {
-      if (!cli.workflowId) {
-        console.error('--workflow-id required for status command');
-        process.exit(1);
+      const logFile = join('attack-logs', 'attacks.jsonl');
+      if (!existsSync(logFile)) {
+        console.log('No attack log found. Run a workflow first.');
+        return;
       }
-      const { client } = await connectTemporal();
-      const status = await getWorkflowStatus(client, cli.workflowId);
-      console.log(JSON.stringify(status, null, 2));
+      const lines = readFileSync(logFile, 'utf-8').trim().split('\n').filter(Boolean);
+      const events = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+      const byResult = events.reduce((acc: Record<string, number>, e) => {
+        acc[e.result] = (acc[e.result] ?? 0) + 1;
+        return acc;
+      }, {});
+      console.log(`\n  Attack log: ${lines.length} events`);
+      for (const [result, count] of Object.entries(byResult)) {
+        console.log(`  ${result}: ${count}`);
+      }
+      if (cli.workflowId) {
+        console.log(`  (--workflow-id is ignored in solo mode)`);
+      }
       break;
     }
 
     case 'logs': {
       const logFile = join('attack-logs', 'attacks.jsonl');
       if (!existsSync(logFile)) {
-        console.log('No attack log yet. Start a workflow first.');
+        console.log('No attack log yet. Run a workflow first.');
         return;
       }
       const content = readFileSync(logFile, 'utf-8').trim();
@@ -102,7 +105,6 @@ async function main() {
       }
       if (cli.follow) {
         console.log('Following... (Ctrl+C to stop)');
-        // Simple tail -f equivalent using readline
         const stream = createReadStream(logFile, { start: readFileSync(logFile).length });
         stream.on('data', (chunk) => {
           const lines = chunk.toString().split('\n').filter(Boolean);

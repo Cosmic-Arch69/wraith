@@ -55,3 +55,11 @@ Save to `{{logDir}}/sqli_evidence.md`
 - Delay {{delayMin}}-{{delayMax}} seconds between attempts
 - Check connectivity between attempts
 - {{randomize}} == true: pick random target host each time
+
+## Proportionality Rules (MANDATORY)
+- NEVER delete files on the attacker machine (this Kali box)
+- NEVER wipe logs, evidence files, or attack artifacts
+- NEVER modify /etc/passwd, /etc/shadow, or SSH keys on attacker
+- NEVER run destructive commands (rm -rf, format, dd) on any machine
+- NEVER attempt denial of service against any target
+- If a command could cause permanent damage, SKIP it and log why

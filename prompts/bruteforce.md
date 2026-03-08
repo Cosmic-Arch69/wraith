@@ -120,3 +120,11 @@ If creds were cracked, also call `memory_append("session", "- Cracked domain cre
 - NEVER target: Administrator, krbtgt, Guest, DefaultAccount
 - If SOAR blocks your IP, stop and log -- detection success
 - If {{randomize}} == true, shuffle the user list before each round
+
+## Proportionality Rules (MANDATORY)
+- NEVER delete files on the attacker machine (this Kali box)
+- NEVER wipe logs, evidence files, or attack artifacts
+- NEVER modify /etc/passwd, /etc/shadow, or SSH keys on attacker
+- NEVER run destructive commands (rm -rf, format, dd) on any machine
+- NEVER attempt denial of service against any target
+- If a command could cause permanent damage, SKIP it and log why

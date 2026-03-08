@@ -16,7 +16,8 @@ export async function runAgent(
   prompt: string,
   agentName: string,
   modelTier: ModelTier = 'medium',
-  mcpServers: Record<string, unknown> = {}
+  mcpServers: Record<string, unknown> = {},
+  maxTurns: number = 150
 ): Promise<ExecutorResult> {
   const start = Date.now();
 
@@ -44,7 +45,7 @@ export async function runAgent(
       prompt,
       options: {
         model: resolveModel(modelTier),
-        maxTurns: 1000,
+        maxTurns,
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
         mcpServers: mcpServers as Record<string, import('@anthropic-ai/claude-agent-sdk').McpServerConfig>,

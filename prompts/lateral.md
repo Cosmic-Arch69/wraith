@@ -58,6 +58,23 @@ evil-winrm -i 172.16.20.103 -u "$CRACKED_USER" -p "$CRACKED_PASS" \
   -c "whoami; hostname; ipconfig" 2>&1
 ```
 
+## S4U / RBCD Delegation (if needed)
+
+If standard lateral movement fails, try constrained/unconstrained delegation. Follow this STRUCTURED approach:
+
+**Max 3 attempts per technique. Track each attempt.**
+
+1. First try: impacket-getST with the SPN from Kerberoasting
+2. Second try: RBCD abuse via rbcd.py if write access to msDS-AllowedToActOnBehalfOfOtherIdentity
+3. Third try: Silver ticket if we have a service hash
+
+After each attempt:
+- Call `memory_append("lateral", "S4U attempt N: [technique] -> [result]")`
+- If attempt fails, read the error and change approach -- do NOT retry the same command
+- After 3 total failures across all S4U techniques, move on
+
+NEVER: Write custom C# code. Use only impacket tools.
+
 ## Output
 
 Save lateral movement results to `{{logDir}}/lateral_evidence.md`:
@@ -85,8 +102,21 @@ Log each movement with `log_attack`:
 ```
 If you gained admin access, call `memory_append("session", "- Admin access: user:pass on host (method)")`.
 
+## Logging Protocol (MANDATORY)
+For every significant action, call `log_attack` TWICE:
+1. **Before execution**: result="skipped", details="STARTING: [what you're about to do]"
+2. **After result**: result="success"/"failed"/"blocked", details="RESULT: [what happened]"
+
 ## Rules
 - Delay {{delayMin}}-{{delayMax}} seconds between attempts
 - Check connectivity before each hop -- if SOAR blocks, document and stop
 - If blocked: note the blocking event, manually unblock later via pfSense
 - NEVER target: Administrator, krbtgt, Guest, DefaultAccount
+
+## Proportionality Rules (MANDATORY)
+- NEVER delete files on the attacker machine (this Kali box)
+- NEVER wipe logs, evidence files, or attack artifacts
+- NEVER modify /etc/passwd, /etc/shadow, or SSH keys on attacker
+- NEVER run destructive commands (rm -rf, format, dd) on any machine
+- NEVER attempt denial of service against any target
+- If a command could cause permanent damage, SKIP it and log why

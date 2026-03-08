@@ -2,9 +2,24 @@
 // Provides pentest tools to Claude agents via MCP protocol
 
 import { execSync, spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync, appendFileSync, existsSync, readdirSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, existsSync, readdirSync, mkdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AttackEvent } from '../types/index.js';
+
+const INJECTION_PATTERNS = /ignore previous instructions|you are now|system:|SYSTEM_ADMIN_OVERRIDE/i;
+const MAX_OUTPUT_BYTES = 50 * 1024; // 50KB
+
+function sanitizeOutput(raw: string): string {
+  let sanitized = raw.replace(/<[^>]*>/g, '');
+  sanitized = sanitized
+    .split('\n')
+    .filter(line => !INJECTION_PATTERNS.test(line))
+    .join('\n');
+  if (sanitized.length > MAX_OUTPUT_BYTES) {
+    sanitized = sanitized.slice(0, MAX_OUTPUT_BYTES);
+  }
+  return `[BEGIN COMMAND OUTPUT]\n${sanitized}\n[END COMMAND OUTPUT]`;
+}
 
 export const PENTEST_TOOLS = [
   {
@@ -108,6 +123,18 @@ export const PENTEST_TOOLS = [
       required: ['host'],
     },
   },
+  {
+    name: 'validate_file',
+    description: 'Validate that a file exists and meets a minimum size threshold',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        path: { type: 'string', description: 'Path to the file to validate' },
+        min_size_bytes: { type: 'number', description: 'Minimum file size in bytes (default 1024)' },
+      },
+      required: ['path'],
+    },
+  },
 ];
 
 const LOG_DIR = process.env.WRAITH_LOG_DIR ?? './attack-logs';
@@ -144,17 +171,38 @@ export function handleTool(name: string, input: Record<string, unknown>): string
 
     case 'execute_command': {
       const cmd = input.command as string;
-      const timeout = ((input.timeout_sec as number) ?? 60) * 1000;
+      let timeout = ((input.timeout_sec as number) ?? 60) * 1000;
+
+      // Bug 6: Cracking cap -- max 2 concurrent john/hashcat processes
+      if (/\b(john|hashcat)\b/.test(cmd)) {
+        try {
+          const count = parseInt(
+            execSync("pgrep -cf '(john|hashcat)'", { encoding: 'utf-8', timeout: 5000 }).trim(),
+            10,
+          );
+          if (count >= 2) {
+            return 'BLOCKED: Maximum 2 concurrent cracking processes. Wait for existing jobs to finish or kill them first.';
+          }
+        } catch {
+          // pgrep returns exit 1 when no matches -- that means 0 running, safe to proceed
+        }
+      }
+
+      // Bug 16: BloodHound timeout cap at 5 minutes
+      if (/bloodhound/i.test(cmd)) {
+        timeout = Math.min(timeout, 300000);
+      }
+
       try {
         const output = execSync(cmd, {
           timeout,
           encoding: 'utf-8',
           stdio: ['pipe', 'pipe', 'pipe'],
         });
-        return output || '(no output)';
+        return sanitizeOutput(output || '(no output)');
       } catch (err: unknown) {
         const e = err as { stdout?: string; stderr?: string; message?: string };
-        return `ERROR:\n${e.stdout ?? ''}\n${e.stderr ?? ''}\n${e.message ?? ''}`;
+        return sanitizeOutput(`ERROR:\n${e.stdout ?? ''}\n${e.stderr ?? ''}\n${e.message ?? ''}`);
       }
     }
 
@@ -182,7 +230,7 @@ export function handleTool(name: string, input: Record<string, unknown>): string
 
     case 'read_file': {
       try {
-        return readFileSync(input.path as string, 'utf-8');
+        return sanitizeOutput(readFileSync(input.path as string, 'utf-8'));
       } catch (err) {
         return `Error reading file: ${err}`;
       }
@@ -244,6 +292,24 @@ export function handleTool(name: string, input: Record<string, unknown>): string
         return result.trim();
       } catch {
         return 'BLOCKED (command failed)';
+      }
+    }
+
+    case 'validate_file': {
+      const filePath = input.path as string;
+      const minSize = (input.min_size_bytes as number) ?? 1024;
+      try {
+        const stat = statSync(filePath);
+        if (stat.size < minSize) {
+          return `FAILED: File ${filePath} is ${stat.size} bytes (minimum ${minSize} bytes required)`;
+        }
+        return `VALID: File ${filePath} is ${stat.size} bytes`;
+      } catch (err: unknown) {
+        const e = err as { code?: string };
+        if (e.code === 'ENOENT') {
+          return `FAILED: File ${filePath} does not exist`;
+        }
+        return `FAILED: Cannot stat ${filePath}: ${err}`;
       }
     }
 

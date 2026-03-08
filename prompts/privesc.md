@@ -61,6 +61,21 @@ Expected Wazuh rule: **100162** (level 12) -- PowerShell modifies Defender
 
 Log each with `log_attack`, save evidence to `{{logDir}}/privesc_evidence.md`.
 
+## Memory Protocol
+
+**START:** Call `memory_read()` -- loads lateral movement findings + all cracked creds. Use admin creds from memory.
+
+**END:** Call `memory_write("privesc", ...)` with:
+```
+## Privesc Findings
+- Domain Admin achieved: yes/no
+- DCSync completed: yes/no + hashes captured
+- Golden Ticket: yes/no
+- KRBTGT hash: [if captured]
+- Wazuh rules triggered: [list]
+- SOAR fired: yes/no (expected for DCSync)
+```
+
 ## Rules
 - After DCSync, the SOAR will likely block your IP -- document this as a detection success
 - If blocked, stop and log -- do not try to evade the SOAR response

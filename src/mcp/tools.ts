@@ -2,7 +2,7 @@
 // Provides pentest tools to Claude agents via MCP protocol
 
 import { execSync, spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync, appendFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, existsSync, readdirSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AttackEvent } from '../types/index.js';
 
@@ -62,6 +62,41 @@ export const PENTEST_TOOLS = [
     },
   },
   {
+    name: 'memory_read',
+    description: 'Read session memory. No filename = returns ALL agent memory files (use on startup to recover context). With filename = reads that specific file.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        filename: { type: 'string', description: 'e.g. "recon", "kerberoast", "session". Omit to read all.' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'memory_write',
+    description: 'Write (overwrite) a memory file. Use to save your findings so they survive context compression.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        filename: { type: 'string', description: 'e.g. "recon", "kerberoast", "session"' },
+        content: { type: 'string', description: 'Markdown content to write' },
+      },
+      required: ['filename', 'content'],
+    },
+  },
+  {
+    name: 'memory_append',
+    description: 'Append content to a memory file without overwriting existing content.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        filename: { type: 'string' },
+        content: { type: 'string' },
+      },
+      required: ['filename', 'content'],
+    },
+  },
+  {
     name: 'check_connectivity',
     description: 'Check if a target IP/host is reachable (detect if SOAR blocked us)',
     inputSchema: {
@@ -78,6 +113,17 @@ export const PENTEST_TOOLS = [
 const LOG_DIR = process.env.WRAITH_LOG_DIR ?? './attack-logs';
 const ATTACK_LOG = join(LOG_DIR, 'attacks.jsonl');
 const SOURCE_IP_FILE = join(LOG_DIR, 'source_ip.txt');
+const MEMORY_DIR = join(LOG_DIR, 'memory');
+
+function memoryPath(filename: string): string {
+  // Sanitize: strip path traversal, force .md extension
+  const safe = filename.replace(/[^a-zA-Z0-9_-]/g, '');
+  return join(MEMORY_DIR, `${safe}.md`);
+}
+
+function ensureMemoryDir() {
+  mkdirSync(MEMORY_DIR, { recursive: true });
+}
 
 function getSourceIp(): string {
   if (existsSync(SOURCE_IP_FILE)) {
@@ -149,6 +195,42 @@ export function handleTool(name: string, input: Record<string, unknown>): string
       } catch (err) {
         return `Error writing file: ${err}`;
       }
+    }
+
+    case 'memory_read': {
+      ensureMemoryDir();
+      const filename = input.filename as string | undefined;
+      if (filename) {
+        const path = memoryPath(filename);
+        if (!existsSync(path)) return `(no memory file: ${filename}.md)`;
+        return readFileSync(path, 'utf-8');
+      }
+      // Read all memory files
+      try {
+        const files = readdirSync(MEMORY_DIR).filter(f => f.endsWith('.md'));
+        if (files.length === 0) return '(memory is empty -- this is a fresh run)';
+        return files.map(f => {
+          const name = f.replace('.md', '');
+          const content = readFileSync(join(MEMORY_DIR, f), 'utf-8');
+          return `## ${name}\n\n${content}`;
+        }).join('\n\n---\n\n');
+      } catch {
+        return '(memory is empty)';
+      }
+    }
+
+    case 'memory_write': {
+      ensureMemoryDir();
+      const path = memoryPath(input.filename as string);
+      writeFileSync(path, input.content as string, 'utf-8');
+      return `Memory saved: ${input.filename}.md`;
+    }
+
+    case 'memory_append': {
+      ensureMemoryDir();
+      const path = memoryPath(input.filename as string);
+      appendFileSync(path, '\n' + (input.content as string), 'utf-8');
+      return `Memory updated: ${input.filename}.md`;
     }
 
     case 'check_connectivity': {

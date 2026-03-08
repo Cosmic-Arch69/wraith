@@ -1,7 +1,7 @@
 // Wraith direct runner -- no Temporal required
 // Executes the agent DAG in-process: sequential phases + parallel where safe
 
-import { readFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import yaml from 'js-yaml';
@@ -57,7 +57,30 @@ export async function runAgent(
 
 export async function runWorkflow(configPath: string): Promise<void> {
   const config = yaml.load(readFileSync(configPath, 'utf-8')) as WraithConfig;
-  mkdirSync(config.output.log_dir, { recursive: true });
+  const logDir = config.output.log_dir;
+  mkdirSync(logDir, { recursive: true });
+  mkdirSync(`${logDir}/memory`, { recursive: true });
+
+  // Seed session.md -- shared context all agents can read
+  writeFileSync(`${logDir}/memory/session.md`, [
+    `# Wraith Session`,
+    `Started: ${new Date().toISOString()}`,
+    ``,
+    `## Target`,
+    `- Domain: ${config.target.domain}`,
+    `- DC: ${config.target.dc}`,
+    `- Hosts: ${config.target.hosts.map(h => `${h.ip} (${h.name})`).join(', ')}`,
+    ``,
+    `## Status`,
+    `- Phase: starting`,
+    `- SOAR blocks: none yet`,
+    `- Cracked credentials: none yet`,
+    ``,
+    `## Instructions for all agents`,
+    `Call memory_read() at the start of your run to load full session context.`,
+    `Call memory_write("{agentname}", ...) to save your findings.`,
+    `Call memory_append("session", ...) to update shared state (SOAR blocks, creds found, etc.).`,
+  ].join('\n'));
 
   console.log(`\n  Target: ${config.target.domain} (${config.target.dc})`);
   console.log(`  Hosts:  ${config.target.hosts.map(h => h.ip).join(', ')}`);

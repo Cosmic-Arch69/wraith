@@ -69,6 +69,20 @@ Save cracked credentials (if any) to `{{logDir}}/cracked_creds.json`:
 }
 ```
 
+## Memory Protocol
+
+**START:** Call `memory_read()` to load session context (recon findings, host list).
+
+**END:** Call `memory_write("kerberoast", ...)` with:
+```
+## Kerberoast Findings
+- AS-REP roastable accounts: [list]
+- Kerberoastable SPNs: [list]
+- Cracked credentials: [user:pass list]
+- Hashes captured: yes/no
+```
+If creds were cracked, also call `memory_append("session", "- Cracked domain creds: user:pass (method: kerberoast/asrep)")`.
+
 ## Rules
 - {{randomize}} == true means pick a random subset of targets each run
 - Delay {{delayMin}}-{{delayMax}} seconds between major attack steps

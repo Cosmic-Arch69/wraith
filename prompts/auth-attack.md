@@ -95,6 +95,20 @@ Save evidence to `{{logDir}}/auth_attack_evidence.md`:
 - Any successful logins with credentials
 - Whether Wazuh triggered and SOAR blocked
 
+## Memory Protocol
+
+**START:** Call `memory_read()` to load session context.
+
+**END:** Call `memory_write("auth-attack", ...)` with:
+```
+## Auth Attack Findings
+- Accounts cracked: [user:pass list]
+- Hosts attacked: [list]
+- Wazuh rules triggered: [list]
+- SOAR fired: yes/no
+```
+If creds were cracked, also call `memory_append("session", "- Cracked web creds: user:pass")`.
+
 ## Rules
 
 - Delay {{delayMin}}-{{delayMax}} seconds between attempts

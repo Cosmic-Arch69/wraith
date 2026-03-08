@@ -99,6 +99,20 @@ Log each spray round with `log_attack`:
 
 If the kerberoast phase already created `cracked_creds.json`, append to it rather than overwriting.
 
+## Memory Protocol
+
+**START:** Call `memory_read()` to load session context. Check kerberoast memory for already-cracked creds before spraying.
+
+**END:** Call `memory_write("bruteforce", ...)` with:
+```
+## Bruteforce Findings
+- Accounts sprayed: [count]
+- Cracked: [user:pass list]
+- Locked out: [list]
+- Wazuh rules triggered: [list]
+```
+If creds were cracked, also call `memory_append("session", "- Cracked domain creds: user:pass (method: smb-spray)")`.
+
 ## Rules
 
 - Never spray more than 3 passwords per hour per account (avoid lockout)

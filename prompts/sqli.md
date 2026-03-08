@@ -38,6 +38,19 @@ Log each attempt with `log_attack`:
 
 Save to `{{logDir}}/sqli_evidence.md`
 
+## Memory Protocol
+
+**START:** Call `memory_read()` to load session context (hosts, prior findings).
+
+**END:** Call `memory_write("sqli", ...)` with:
+```
+## SQLi Findings
+- Vulnerable endpoints: [list with URL + payload]
+- Auth bypass: yes/no + details
+- Data extracted: [summary]
+- Wazuh rules triggered: [list]
+```
+
 ## Rules
 - Delay {{delayMin}}-{{delayMax}} seconds between attempts
 - Check connectivity between attempts

@@ -74,6 +74,22 @@ Log each recon action with `log_attack`:
 - wazuhRuleExpected: "100190"
 - result: success/failed
 
+## Memory Protocol
+
+**START:** Call `memory_read()` (no args) to load all session context from prior agents.
+
+**DURING:** Call `memory_append("session", ...)` if SOAR blocks you or you discover something critical.
+
+**END:** Call `memory_write("recon", ...)` with your findings in this format:
+```
+## Recon Findings
+- Live hosts: [list with IPs, open ports, web apps]
+- DC: [IP, confirmed/unreachable]
+- Anonymous LDAP: yes/no
+- AS-REP roastable accounts: [list]
+- Web apps: [list with URLs and tech]
+```
+
 ## Rules
 - Be thorough but efficient -- one pass of each check
 - Save ALL tool output to `{{logDir}}/recon_raw.txt`

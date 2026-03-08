@@ -70,6 +70,21 @@ Log each movement with `log_attack`:
 - technique: "T1550.002" or "T1021.002"
 - wazuhRuleExpected: "100120" or "100121"
 
+## Memory Protocol
+
+**START:** Call `memory_read()` -- this loads kerberoast + bruteforce findings. Use cracked creds from memory rather than relying only on `cracked_creds.json`.
+
+**END:** Call `memory_write("lateral", ...)` with:
+```
+## Lateral Movement Findings
+- Hosts accessed: [list with method used]
+- Credentials that worked: [user:pass + which hosts]
+- Admin access achieved: yes/no + host
+- Wazuh rules triggered: [list]
+- SOAR fired: yes/no + blocked IP
+```
+If you gained admin access, call `memory_append("session", "- Admin access: user:pass on host (method)")`.
+
 ## Rules
 - Delay {{delayMin}}-{{delayMax}} seconds between attempts
 - Check connectivity before each hop -- if SOAR blocks, document and stop

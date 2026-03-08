@@ -65,6 +65,19 @@ Log every injection attempt with `log_attack`:
 
 Save evidence to `{{logDir}}/cmdi_evidence.md`
 
+## Memory Protocol
+
+**START:** Call `memory_read()` to load session context (hosts, prior findings).
+
+**END:** Call `memory_write("cmdi", ...)` with:
+```
+## CmdI Findings
+- RCE achieved: yes/no + host + payload
+- Commands executed: [list]
+- Wazuh rules triggered: [list]
+- SOAR fired: yes/no
+```
+
 ## Rules
 - Delay {{delayMin}}-{{delayMax}} seconds between attempts
 - Check connectivity before each major attempt

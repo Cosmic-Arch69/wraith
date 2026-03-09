@@ -3,7 +3,18 @@
 
 import type { AgentDefinition, AgentName } from './types/index.js';
 
-export const AGENTS: Readonly<Record<AgentName, AgentDefinition>> = Object.freeze({
+export const AGENTS: Readonly<Partial<Record<AgentName, AgentDefinition>>> & Record<string, AgentDefinition> = Object.freeze({
+
+  // Phase 0: OSINT / External Recon (only runs in external engagement mode)
+  'osint-recon': {
+    name: 'osint-recon',
+    displayName: 'OSINT/External Recon agent',
+    prerequisites: [],
+    promptTemplate: 'osint-recon',
+    deliverableFilename: 'osint_deliverable.json',
+    modelTier: 'medium',
+    timeout_sec: 600,
+  },
 
   // Phase 1: Reconnaissance (sequential entry point)
   'recon': {

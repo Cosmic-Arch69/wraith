@@ -19,7 +19,9 @@ const __dirname = dirname(__filename);
 const MCP_SERVER_PATH = join(__dirname, 'mcp', 'server.js');
 
 // v2: Per-agent turn budgets -- prevent context exhaustion + runaway loops
-const TURN_BUDGETS: Record<AgentName, number> = {
+// v2.1: Partial record -- osint-recon added by T6 integration
+const TURN_BUDGETS: Partial<Record<AgentName, number>> & Record<string, number> = {
+  'osint-recon': 60,
   recon: 100,
   sqli: 80,
   cmdi: 80,
@@ -176,6 +178,7 @@ export async function runAgent(
 ): Promise<{ success: boolean; result: string | null }> {
   const config = yaml.load(readFileSync(configPath, 'utf-8')) as WraithConfig;
   const agentDef = AGENTS[agentName];
+  if (!agentDef) throw new Error(`Unknown agent: ${agentName}`);
   const logDir = config.output.log_dir;
 
   const firstWebHost = config.target.hosts.find(h => h.web_url);

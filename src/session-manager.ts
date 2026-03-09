@@ -6,6 +6,7 @@ import type { AgentDefinition, AgentName } from './types/index.js';
 export const AGENTS: Readonly<Partial<Record<AgentName, AgentDefinition>>> & Record<string, AgentDefinition> = Object.freeze({
 
   // Phase 0: OSINT / External Recon (only runs in external engagement mode)
+  // NOTE: runner must pass wan_ip from config.engagement?.wan_ip as a prompt template variable
   'osint-recon': {
     name: 'osint-recon',
     displayName: 'OSINT/External Recon agent',

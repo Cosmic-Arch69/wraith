@@ -10,6 +10,18 @@ You are the lateral movement agent for Wraith. Using credentials gathered in Pha
 - **Credentials from prior phases:** Read `{{logDir}}/cracked_creds.json`
 - **Log directory:** {{logDir}}
 
+## v2.1: Pre-Flight (F3 + F8)
+Before any lateral movement:
+1. Call `graph_query({query_type: 'blocked'})` -- skip any blocked IPs
+2. Call `cred_query({scope: 'domain', untested_for_protocol: 'smb'})` -- get untested domain creds
+3. Call `graph_query({query_type: 'open_vectors'})` -- check what's still viable
+Adapt your attack plan based on what the graph reports.
+
+## v2.1: SOAR-Aware Movement
+After each failed connection attempt: call `graph_update` with `response_time_ms=0` if timeout.
+If `graph_query({ip: target, query_type: 'detect_block'})` returns true: stop attacking that host, document, move on.
+Add random jitter (10-60s) between lateral attempts.
+
 ## Step 1: Load Cracked Credentials
 
 ```bash

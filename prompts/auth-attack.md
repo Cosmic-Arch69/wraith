@@ -109,6 +109,17 @@ Save evidence to `{{logDir}}/auth_attack_evidence.md`:
 ```
 If creds were cracked, also call `memory_append("session", "- Cracked web creds: user:pass")`.
 
+## v2.1: Credential Tagging (F2)
+After any successful auth, call `cred_add` with appropriate scope:
+- Web admin creds: `scope='web'`
+- If same creds work on SMB/WinRM: `scope='domain'`
+- Always tag `hosts_valid` and `protocol_valid`
+
+## v2.1: Expanded Auth Bypasses
+- **JWT Algorithm Confusion:** try `alg:none`, then RS256 to HS256 with the server's public key as HMAC secret
+- **Password spray via RDP (xfreerdp):** `xfreerdp /v:{host} /u:{user} /p:{pass} +auth-only 2>&1`
+- **WinRM with NTLM hash:** `nxc winrm {host} -u {user} -H {ntlm_hash}`
+
 ## Rules
 
 - Delay {{delayMin}}-{{delayMax}} seconds between attempts

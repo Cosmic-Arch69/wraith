@@ -78,7 +78,25 @@ Save evidence to `{{logDir}}/cmdi_evidence.md`
 - SOAR fired: yes/no
 ```
 
+## v2.1: Pivot Detection
+After any successful RCE, immediately run:
+```bash
+ipconfig /all 2>&1 || ip addr show 2>&1
+route print 2>&1 || ip route show 2>&1
+```
+Call `graph_update` to record any discovered internal subnets in notes:
+```
+graph_update({ip: "{{web_host}}", notes: ["Internal subnets discovered: 10.x.x.x/24"]})
+```
+
+## v2.1: Web Pivot Fallbacks
+After DVWA attempts, if blocked or failed, try these fallbacks in order:
+- **SSRF via Juice Shop chatbot:** reach internal services via the chatbot endpoint
+- **Node.js RCE via prototype pollution:** `node -e "require('child_process').exec('id',...)"` injected via `__proto__` or `constructor.prototype` in JSON body
+- **File upload bypass:** attempt double extension (.php.jpg) to bypass upload filters
+
 ## Rules
 - Delay {{delayMin}}-{{delayMax}} seconds between attempts
 - Check connectivity before each major attempt
 - If SOAR blocks you (check_connectivity returns BLOCKED), stop and log it
+- **v2.1 SOAR Awareness:** Before each attack, call `graph_query({ip: "{{web_host}}", query_type: "detect_block"})`. If blocked, document and switch technique immediately.

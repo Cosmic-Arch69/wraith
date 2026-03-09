@@ -5,8 +5,10 @@ import { execSync, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, appendFileSync, existsSync, readdirSync, mkdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AttackEvent } from '../types/index.js';
+import { CRED_TOOLS, handleCredTool } from './cred-tools.js';
+import { GRAPH_TOOLS, handleGraphTool } from './graph-tools.js';
 
-export const PENTEST_TOOLS = [
+const CORE_PENTEST_TOOLS = [
   {
     name: 'execute_command',
     description: 'Execute a shell command (Impacket, CrackMapExec, nmap, etc). Returns stdout+stderr.',
@@ -120,6 +122,12 @@ export const PENTEST_TOOLS = [
       required: ['path'],
     },
   },
+];
+
+export const PENTEST_TOOLS = [
+  ...CORE_PENTEST_TOOLS,
+  ...CRED_TOOLS,
+  ...GRAPH_TOOLS,
 ];
 
 const LOG_DIR = process.env.WRAITH_LOG_DIR ?? './attack-logs';
@@ -298,7 +306,15 @@ export function handleTool(name: string, input: Record<string, unknown>): string
       }
     }
 
-    default:
+    default: {
+      // Delegate to cred or graph tools if not found in main switch
+      if (['cred_add', 'cred_query', 'generate_mutations'].includes(name)) {
+        return handleCredTool(name, input);
+      }
+      if (['graph_update', 'graph_query'].includes(name)) {
+        return handleGraphTool(name, input);
+      }
       return `Unknown tool: ${name}`;
+    }
   }
 }

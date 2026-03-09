@@ -47,6 +47,8 @@ async function main() {
             domain_pass: config.target.credentials.domain_pass,
             web_dvwa_user: config.target.credentials.web_dvwa_user ?? 'admin',
             web_dvwa_pass: config.target.credentials.web_dvwa_pass ?? 'password',
+            wan_ip: config.engagement?.wan_ip ?? '',
+            engagement_type: config.engagement?.type ?? 'internal',
           });
           const unresolved = prompt.match(/\{\{[^}]+\}\}/g);
           const status = unresolved ? `WARN (unresolved: ${unresolved.join(', ')})` : 'OK';

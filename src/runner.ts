@@ -3,16 +3,20 @@
 // v2-clean: bug fixes only (phase validation, turn budgets, process management, pot-watching)
 // NO Agents of Chaos hardening (no identity boundaries, no output sanitization, no proportionality rules)
 
-import { readFileSync, mkdirSync, writeFileSync, appendFileSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, mkdirSync, writeFileSync, appendFileSync, existsSync, readdirSync, renameSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import yaml from 'js-yaml';
 import { runAgent as claudeRun } from './ai/claude-executor.js';
+import type { ExecutorResult } from './ai/claude-executor.js';
 import type { AgentName, WraithConfig } from './types/index.js';
-import { AGENTS, EXECUTION_PHASES } from './session-manager.js';
+import { AGENTS, getExecutionPhases } from './session-manager.js';
 import { loadPrompt } from './services/prompt-manager.js';
 import { processManager } from './services/process-manager.js';
 import { PotWatcher } from './services/pot-watcher.js';
+import { CredentialStore } from './services/credential-store.js';
+import { AttackGraphService } from './services/attack-graph.js';
+import { responderManager } from './services/responder-manager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -31,6 +35,13 @@ const TURN_BUDGETS: Partial<Record<AgentName, number>> & Record<string, number> 
   lateral: 150,
   privesc: 200,
   report: 50,
+};
+
+// v2.1 F4: Default wall-clock timeouts per agent (seconds)
+const DEFAULT_TIMEOUTS: Record<string, number> = {
+  'osint-recon': 600, recon: 900, sqli: 600, cmdi: 600,
+  'auth-attack': 600, kerberoast: 600, bruteforce: 900,
+  lateral: 1200, privesc: 1200, report: 600,
 };
 
 // Read all memory files and inject them into the prompt -- vault pattern.
@@ -167,7 +178,23 @@ function generateReportInput(logDir: string): void {
     }
   }
 
-  writeFileSync(join(logDir, 'report_input.json'), JSON.stringify(input, null, 2));
+  // v2.1 F9: Load previous run for diff -- rename existing report_input.json to .prev.json first
+  const prevReportPath = join(logDir, 'report_input.prev.json');
+  const currentReportPath = join(logDir, 'report_input.json');
+  if (existsSync(currentReportPath)) {
+    renameSync(currentReportPath, prevReportPath);
+  }
+
+  // Include previous run data if available
+  if (existsSync(prevReportPath)) {
+    try {
+      const prev = JSON.parse(readFileSync(prevReportPath, 'utf-8'));
+      input.previous_run = prev;
+      input.run_diff_available = true;
+    } catch { /* skip */ }
+  }
+
+  writeFileSync(currentReportPath, JSON.stringify(input, null, 2));
   console.log(`  [runner] Generated report_input.json`);
 }
 
@@ -197,6 +224,8 @@ export async function runAgent(
     domain_pass: config.target.credentials.domain_pass,
     web_dvwa_user: config.target.credentials.web_dvwa_user ?? 'admin',
     web_dvwa_pass: config.target.credentials.web_dvwa_pass ?? 'password',
+    wan_ip: config.engagement?.wan_ip ?? '',
+    engagement_type: config.engagement?.type ?? 'internal',
   });
 
   const mcpServers = {
@@ -216,7 +245,31 @@ export async function runAgent(
 
   const turnBudget = TURN_BUDGETS[agentName];
   console.log(`[${agentName}] Starting (budget: ${turnBudget} turns)...`);
-  const result = await claudeRun(fullPrompt, agentName, agentDef.modelTier ?? 'medium', mcpServers, turnBudget);
+
+  // v2.1 F4: Wall-clock timeout enforcement
+  const wallClockSec = config.attack?.timeouts?.[agentName]
+    ?? agentDef.timeout_sec
+    ?? DEFAULT_TIMEOUTS[agentName]
+    ?? 900;
+
+  const timeoutPromise = new Promise<ExecutorResult>((resolve) =>
+    setTimeout(() => resolve({
+      result: `TIMEOUT: Agent ${agentName} exceeded ${wallClockSec}s wall-clock limit`,
+      success: false,
+      duration: wallClockSec * 1000,
+    }), wallClockSec * 1000)
+  );
+
+  const result = await Promise.race([
+    claudeRun(fullPrompt, agentName, agentDef.modelTier ?? 'medium', mcpServers, turnBudget),
+    timeoutPromise,
+  ]);
+
+  if (result.result?.startsWith('TIMEOUT:')) {
+    console.log(`  [timeout] ${agentName} killed after ${wallClockSec}s`);
+    appendFileSync(`${logDir}/memory/session.md`, `\n- [TIMEOUT] ${agentName} exceeded ${wallClockSec}s -- partial results may exist\n`);
+  }
+
   console.log(`[${agentName}] ${result.success ? 'Complete' : 'Failed'} (${result.duration}ms, ${result.turns ?? 0} turns)`);
 
   return { success: result.success, result: result.result };
@@ -263,6 +316,40 @@ export async function runWorkflow(configPath: string): Promise<void> {
   const potWatcher = new PotWatcher(logDir);
   potWatcher.start();
 
+  // v2.1: Initialize credential store and attack graph
+  const credStore = new CredentialStore(logDir);
+  const attackGraph = new AttackGraphService(logDir);
+
+  // Set engagement type on attack graph
+  attackGraph.setEngagement(
+    config.engagement?.type ?? 'internal',
+    config.engagement?.wan_ip
+  );
+
+  // Seed credential store with config credentials (if provided)
+  if (config.target.credentials.domain_user && config.target.credentials.domain_pass) {
+    credStore.add({
+      username: config.target.credentials.domain_user,
+      password: config.target.credentials.domain_pass,
+      source: 'config',
+      scope: 'domain',
+      hosts_valid: [],
+      hosts_failed: [],
+      protocol_valid: [],
+      protocol_failed: [],
+    });
+  }
+
+  // Seed attack graph with known hosts
+  for (const host of config.target.hosts) {
+    attackGraph.initNode(host.ip, host.name);
+  }
+
+  // Start Responder in internal/assumed-breach mode (not external)
+  if (config.engagement?.type !== 'external') {
+    responderManager.start('eth0');
+  }
+
   // Seed session.md -- shared context all agents can read
   writeFileSync(`${logDir}/memory/session.md`, [
     `# Wraith Session`,
@@ -288,7 +375,8 @@ export async function runWorkflow(configPath: string): Promise<void> {
   console.log(`  Hosts:  ${config.target.hosts.map(h => h.ip).join(', ')}`);
   console.log(`  Logs:   ${config.output.log_dir}\n`);
 
-  for (const phase of EXECUTION_PHASES) {
+  const phases = getExecutionPhases(config.engagement?.type ?? 'internal');
+  for (const phase of phases) {
     if (phase.length === 1) {
       const agentName = phase[0];
 
@@ -329,6 +417,9 @@ export async function runWorkflow(configPath: string): Promise<void> {
 
   // v2: Stop pot watcher
   potWatcher.stop();
+
+  // v2.1: Stop Responder
+  responderManager.stop();
 
   console.log('\n  Wraith complete. Check attack-logs/ for results.');
   console.log(`  Report: ${config.output.log_dir}/pentest_report.md\n`);

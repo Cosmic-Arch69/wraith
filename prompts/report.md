@@ -86,3 +86,19 @@ X of Y expected rules triggered = X% coverage
 - Base all findings on actual evidence files -- no fabrication
 - Include exact timestamps from attacks.jsonl
 - If SOAR blocked an attack, clearly note it as a detection success
+
+## v2.1: Run Diff (F9)
+
+If `previous_run` is present in your input (check `report_input.json` for `run_diff_available: true`):
+1. Read `previous_run.phases` and compare with current `phases`
+2. Generate a **Run Comparison** section in the report:
+   - Which attacks succeeded in previous run but failed now (defensive improvement)
+   - Which attacks failed before but succeeded now (new attack surface)
+   - New techniques attempted this run that weren't in previous run
+   - Overall trend: improving / degrading / stable
+
+Format as a table:
+| Technique | Previous | Current | Delta |
+|-----------|----------|---------|-------|
+| SQLi | SUCCESS | SUCCESS | same |
+| DCSync | SUCCESS | FAILED | defended |

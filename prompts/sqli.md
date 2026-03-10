@@ -51,6 +51,25 @@ Save to `{{logDir}}/sqli_evidence.md`
 - Wazuh rules triggered: [list]
 ```
 
+## v2.1: Credential Tagging (F2)
+After any successful credential discovery, call `cred_add` with scope='web', source='sqli'. Example:
+```
+cred_add({username: "admin@juice-sh.op", password: "admin123", source: "sqli", scope: "web", hosts_valid: ["172.16.20.103"], protocol_valid: ["http"]})
+```
+
+## v2.1: Web Pivot Playbook (F7)
+After existing SQL injection attacks, attempt the following pivot vectors. For each attempt, call `graph_update` to record the result as vector_open or vector_blocked.
+
+- **XXE/SSRF via B2B endpoint:** `POST /b2b/v2/orders` with XML payload containing external entity pointing to `file:///etc/passwd` or `http://internal-service/`
+- **Node.js Prototype Pollution:** test `__proto__` or `constructor.prototype` in JSON payloads against API endpoints
+- **File Upload to Webshell:** test `/api/FileUploads`, attempt PHP/ASPX webshell upload
+- **SSRF via image URL:** use profile image URL field -- point to an internal IP to probe reachability
+
+For each attempt:
+```
+graph_update({ip: "{{web_host}}", vectors_open: ["xxe"] | vectors_blocked: ["xxe"], notes: ["XXE attempt result: ..."]})
+```
+
 ## Rules
 - Delay {{delayMin}}-{{delayMax}} seconds between attempts
 - Check connectivity between attempts

@@ -10,6 +10,7 @@ export interface CliArgs {
   workflowId?: string;
   follow: boolean;
   dryRun: boolean;
+  engagement?: string;
 }
 
 export function parseCli(): CliArgs {
@@ -23,6 +24,7 @@ export function parseCli(): CliArgs {
       'workflow-id': { type: 'string', short: 'w' },
       follow:      { type: 'boolean', short: 'f', default: false },
       'dry-run':   { type: 'boolean', short: 'd', default: false },
+      engagement:  { type: 'string',  short: 'e' },
     },
     strict: false,
   });
@@ -33,6 +35,7 @@ export function parseCli(): CliArgs {
     workflowId: values['workflow-id'] as string | undefined,
     follow: values.follow as boolean,
     dryRun: values['dry-run'] as boolean,
+    engagement: values.engagement as string | undefined,
   };
 }
 
@@ -50,5 +53,6 @@ export function printUsage() {
     -w, --workflow-id  Temporal workflow ID (for status command)
     -f, --follow       Follow log output (for logs command)
     -d, --dry-run      Validate config + prompts without executing
+    -e, --engagement   Override engagement type (external, internal, assumed-breach)
   `);
 }

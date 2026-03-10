@@ -1,9 +1,21 @@
 // Agent registry and DAG for Wraith
 // 9 agents across 6 attack phases: recon -> web+creds parallel -> lateral -> privesc -> report
 
-import type { AgentDefinition, AgentName } from './types/index.js';
+import type { AgentDefinition, AgentName, EngagementType } from './types/index.js';
 
-export const AGENTS: Readonly<Record<AgentName, AgentDefinition>> = Object.freeze({
+export const AGENTS: Readonly<Partial<Record<AgentName, AgentDefinition>>> & Record<string, AgentDefinition> = Object.freeze({
+
+  // Phase 0: OSINT / External Recon (only runs in external engagement mode)
+  // NOTE: runner must pass wan_ip from config.engagement?.wan_ip as a prompt template variable
+  'osint-recon': {
+    name: 'osint-recon',
+    displayName: 'OSINT/External Recon agent',
+    prerequisites: [],
+    promptTemplate: 'osint-recon',
+    deliverableFilename: 'osint_deliverable.json',
+    modelTier: 'medium',
+    timeout_sec: 600,
+  },
 
   // Phase 1: Reconnaissance (sequential entry point)
   'recon': {
@@ -99,3 +111,16 @@ export const EXECUTION_PHASES: AgentName[][] = [
   ['privesc'],                                  // Phase 5: sequential
   ['report'],                                   // Phase 6: sequential
 ];
+
+// v2.1 F1: Dynamic phase selection based on engagement type
+// For external mode, prepend Phase 0 (osint-recon) before the standard phases.
+// For internal/assumed-breach, return the existing phases unchanged.
+export function getExecutionPhases(engagementType: EngagementType): AgentName[][] {
+  if (engagementType === 'external') {
+    return [
+      ['osint-recon'],  // Phase 0: external OSINT / recon (runs before internal phases)
+      ...EXECUTION_PHASES,
+    ];
+  }
+  return EXECUTION_PHASES;
+}

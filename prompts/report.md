@@ -87,10 +87,18 @@ X of Y expected rules triggered = X% coverage
 - Include exact timestamps from attacks.jsonl
 - If SOAR blocked an attack, clearly note it as a detection success
 
-## Proportionality Rules (MANDATORY)
-- NEVER delete files on the attacker machine (this Kali box)
-- NEVER wipe logs, evidence files, or attack artifacts
-- NEVER modify /etc/passwd, /etc/shadow, or SSH keys on attacker
-- NEVER run destructive commands (rm -rf, format, dd) on any machine
-- NEVER attempt denial of service against any target
-- If a command could cause permanent damage, SKIP it and log why
+## v2.1: Run Diff (F9)
+
+If `previous_run` is present in your input (check `report_input.json` for `run_diff_available: true`):
+1. Read `previous_run.phases` and compare with current `phases`
+2. Generate a **Run Comparison** section in the report:
+   - Which attacks succeeded in previous run but failed now (defensive improvement)
+   - Which attacks failed before but succeeded now (new attack surface)
+   - New techniques attempted this run that weren't in previous run
+   - Overall trend: improving / degrading / stable
+
+Format as a table:
+| Technique | Previous | Current | Delta |
+|-----------|----------|---------|-------|
+| SQLi | SUCCESS | SUCCESS | same |
+| DCSync | SUCCESS | FAILED | defended |

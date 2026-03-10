@@ -1,0 +1,30 @@
+# Wraith config -- YASHnet External Assessment
+# Attacker starts outside: only WAN IP known, no internal topology, no creds
+# pfSense WAN: 10.0.0.183
+# Exposed ports: 8080->Win10:80, 8081->Win11:80, 3001->Win10:3000, 3002->Win11:3000,
+#                9443->Wazuh:443, 2200->DC1:3389, 3389->Win10:3389, 3390->Win11:3389
+
+engagement:
+  type: external
+  wan_ip: "10.0.0.183"
+  name: "YASHnet External Assessment"
+
+target:
+  domain: "YASHnet.local"
+  dc: ""                          # unknown -- attacker discovers via OSINT
+  hosts:
+    - ip: "10.0.0.183"
+      name: "pfSense-WAN"
+  credentials:
+    domain_user: ""               # none -- attacker earns them
+    domain_pass: ""
+
+attack:
+  randomize: true
+  delay_min_sec: 5
+  delay_max_sec: 30
+  phases: [0, 1, 2, 3, 4, 5, 6]  # phase 0 = osint-recon (external entry point)
+
+output:
+  log_dir: "./attack-logs-external"
+  report: true

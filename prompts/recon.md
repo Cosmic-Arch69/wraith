@@ -96,10 +96,19 @@ Log each recon action with `log_attack`:
 - Do NOT start any exploitation -- recon only
 - If a host is unreachable, note it and continue
 
-## Proportionality Rules (MANDATORY)
-- NEVER delete files on the attacker machine (this Kali box)
-- NEVER wipe logs, evidence files, or attack artifacts
-- NEVER modify /etc/passwd, /etc/shadow, or SSH keys on attacker
-- NEVER run destructive commands (rm -rf, format, dd) on any machine
-- NEVER attempt denial of service against any target
-- If a command could cause permanent damage, SKIP it and log why
+## v2.1: DVWA Auto-Detection (F10)
+Before attempting any DVWA attacks, probe it:
+```bash
+curl -s -o /dev/null -w "%{http_code}" http://{{web_host}}/dvwa/login.php
+```
+If response contains MySQL errors or is not 200, mark DVWA unavailable:
+```
+Call graph_update with: {ip: "{{web_host}}", dvwa_available: false, vectors_blocked: ["dvwa"], notes: ["DVWA MySQL unconfigured"]}
+```
+Skip all DVWA attacks if unavailable. Log as finding.
+
+## v2.1: Attack Graph Seeding
+At the START of your run, call graph_update for each known host:
+- Log discovered services, open ports, status=up
+- Update vectors_open based on what you find
+At the END, call graph_query with query_type='summary' and include it in your memory write.

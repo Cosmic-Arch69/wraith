@@ -113,6 +113,22 @@ If the kerberoast phase already created `cracked_creds.json`, append to it rathe
 ```
 If creds were cracked, also call `memory_append("session", "- Cracked domain creds: user:pass (method: smb-spray)")`.
 
+## v2.1: Credential Intelligence (F2 + F5)
+Before spraying, query for untested credentials:
+Call: `cred_query({untested_for_protocol: "smb", scope: "domain"})`
+Only use DOMAIN-scoped credentials against SMB/WinRM. Skip web-scoped creds (admin123 won't work on AD).
+
+If you cracked passwords, generate mutations before giving up:
+Call: `generate_mutations({passwords: ["cracked_pass"], domain: "{{domain}}", usernames: ["known_users"], hostnames: ["DC1","Win10PC1"]})`
+Use generated mutations as additional spray candidates.
+
+## v2.1: SOAR Awareness (F8)
+Before each spray round, check connectivity:
+- `execute_command: nc -zw3 {target} 445 2>&1`
+- If blocked: call `graph_update({ip: target, status: 'blocked', vectors_blocked: ['smb']})`
+- Skip blocked hosts, document in lateral_evidence
+Add random 10-30 second jitter between spray attempts to avoid detection signatures.
+
 ## Rules
 
 - Never spray more than 3 passwords per hour per account (avoid lockout)

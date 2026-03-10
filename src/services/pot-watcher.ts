@@ -11,7 +11,20 @@ const POT_FILES: ReadonlyArray<{ path: string; tool: string }> = [
   { path: '/tmp/ntlm.pot', tool: 'john' },
   { path: '/tmp/john.pot', tool: 'john' },
   { path: '/tmp/hashcat.potfile', tool: 'hashcat' },
+  { path: '/usr/share/responder/logs/Responder-Session.log', tool: 'responder' },
 ];
+
+// NTLMv2 format: username::DOMAIN:challenge:NTHash:NTHashResponse
+const NTLMV2_HASH_RE = /^([^:]+)::([^:]+):[0-9a-fA-F]+:[0-9a-fA-F]+:[0-9a-fA-F]+$/;
+
+/**
+ * If the given line matches the Responder NTLMv2 hash format, returns the
+ * extracted username. Returns null if the line is not a captured hash.
+ */
+export function extractResponderUsername(line: string): string | null {
+  const match = NTLMV2_HASH_RE.exec(line.trim());
+  return match?.[1] ?? null;
+}
 
 export class PotWatcher {
   private logDir: string;

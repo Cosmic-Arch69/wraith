@@ -5,23 +5,10 @@ import { execSync, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, appendFileSync, existsSync, readdirSync, mkdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AttackEvent } from '../types/index.js';
+import { CRED_TOOLS, handleCredTool } from './cred-tools.js';
+import { GRAPH_TOOLS, handleGraphTool } from './graph-tools.js';
 
-const INJECTION_PATTERNS = /ignore previous instructions|you are now|system:|SYSTEM_ADMIN_OVERRIDE/i;
-const MAX_OUTPUT_BYTES = 50 * 1024; // 50KB
-
-function sanitizeOutput(raw: string): string {
-  let sanitized = raw.replace(/<[^>]*>/g, '');
-  sanitized = sanitized
-    .split('\n')
-    .filter(line => !INJECTION_PATTERNS.test(line))
-    .join('\n');
-  if (sanitized.length > MAX_OUTPUT_BYTES) {
-    sanitized = sanitized.slice(0, MAX_OUTPUT_BYTES);
-  }
-  return `[BEGIN COMMAND OUTPUT]\n${sanitized}\n[END COMMAND OUTPUT]`;
-}
-
-export const PENTEST_TOOLS = [
+const CORE_PENTEST_TOOLS = [
   {
     name: 'execute_command',
     description: 'Execute a shell command (Impacket, CrackMapExec, nmap, etc). Returns stdout+stderr.',
@@ -137,6 +124,12 @@ export const PENTEST_TOOLS = [
   },
 ];
 
+export const PENTEST_TOOLS = [
+  ...CORE_PENTEST_TOOLS,
+  ...CRED_TOOLS,
+  ...GRAPH_TOOLS,
+];
+
 const LOG_DIR = process.env.WRAITH_LOG_DIR ?? './attack-logs';
 const ATTACK_LOG = join(LOG_DIR, 'attacks.jsonl');
 const SOURCE_IP_FILE = join(LOG_DIR, 'source_ip.txt');
@@ -199,10 +192,10 @@ export function handleTool(name: string, input: Record<string, unknown>): string
           encoding: 'utf-8',
           stdio: ['pipe', 'pipe', 'pipe'],
         });
-        return sanitizeOutput(output || '(no output)');
+        return output || '(no output)';
       } catch (err: unknown) {
         const e = err as { stdout?: string; stderr?: string; message?: string };
-        return sanitizeOutput(`ERROR:\n${e.stdout ?? ''}\n${e.stderr ?? ''}\n${e.message ?? ''}`);
+        return `ERROR:\n${e.stdout ?? ''}\n${e.stderr ?? ''}\n${e.message ?? ''}`;
       }
     }
 
@@ -230,7 +223,7 @@ export function handleTool(name: string, input: Record<string, unknown>): string
 
     case 'read_file': {
       try {
-        return sanitizeOutput(readFileSync(input.path as string, 'utf-8'));
+        return readFileSync(input.path as string, 'utf-8');
       } catch (err) {
         return `Error reading file: ${err}`;
       }
@@ -313,7 +306,15 @@ export function handleTool(name: string, input: Record<string, unknown>): string
       }
     }
 
-    default:
+    default: {
+      // Delegate to cred or graph tools if not found in main switch
+      if (['cred_add', 'cred_query', 'generate_mutations'].includes(name)) {
+        return handleCredTool(name, input);
+      }
+      if (['graph_update', 'graph_query'].includes(name)) {
+        return handleGraphTool(name, input);
+      }
       return `Unknown tool: ${name}`;
+    }
   }
 }

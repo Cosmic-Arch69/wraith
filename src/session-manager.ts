@@ -106,7 +106,8 @@ export const AGENTS: Readonly<Partial<Record<AgentName, AgentDefinition>>> & Rec
 // Groups of agents that can run in parallel
 export const EXECUTION_PHASES: AgentName[][] = [
   ['recon'],                                    // Phase 1: sequential
-  ['sqli', 'cmdi', 'auth-attack', 'kerberoast', 'bruteforce'],  // Phase 2+3: parallel
+  ['sqli', 'cmdi', 'auth-attack'],              // Phase 2: web attacks (3 concurrent, staggered)
+  ['kerberoast', 'bruteforce'],                 // Phase 3: credential attacks (2 concurrent, staggered)
   ['lateral'],                                  // Phase 4: sequential
   ['privesc'],                                  // Phase 5: sequential
   ['report'],                                   // Phase 6: sequential

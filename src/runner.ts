@@ -16,7 +16,7 @@ import { processManager } from './services/process-manager.js';
 import { PotWatcher } from './services/pot-watcher.js';
 import { CredentialStore } from './services/credential-store.js';
 import { AttackGraphService } from './services/attack-graph.js';
-import { responderManager } from './services/responder-manager.js';
+import { ResponderManager } from './services/responder-manager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -34,7 +34,7 @@ const TURN_BUDGETS: Partial<Record<AgentName, number>> & Record<string, number> 
   bruteforce: 100,
   lateral: 150,
   privesc: 200,
-  report: 50,
+  report: 100,  // P5: increased from 50 -- report_input.json is pre-structured but still takes turns to format
 };
 
 // v2.1 F4: Default wall-clock timeouts per agent (seconds)
@@ -283,6 +283,19 @@ async function runAgentWithValidation(
 ): Promise<{ name: AgentName; success: boolean }> {
   const result = await runAgent(agentName, configPath);
 
+  // B9: result === null + success === false means 0 turns (rate limit), not a timeout
+  // Timeout sets result to 'TIMEOUT: ...' string; 0-turns sets result to null
+  if (!result.success && result.result === null) {
+    console.log(`  [retry] ${agentName} completed 0 turns (rate limit suspected) -- waiting 30s before retry`);
+    await new Promise(r => setTimeout(r, 30_000));
+    const retryResult = await runAgent(agentName, configPath, 'RATE_LIMIT_RETRY: Previous run completed 0 turns due to rate limiting. Please proceed with your task normally.');
+    if (!retryResult.success) {
+      console.log(`  [retry] ${agentName} retry also failed -- continuing`);
+      return { name: agentName, success: false };
+    }
+    return { name: agentName, success: retryResult.success };
+  }
+
   if (result.success) {
     const validation = validatePhaseOutput(agentName, logDir);
     if (!validation.valid) {
@@ -345,12 +358,15 @@ export async function runWorkflow(configPath: string): Promise<void> {
     attackGraph.initNode(host.ip, host.name);
   }
 
-  // Start Responder in internal/assumed-breach mode (not external)
+  // B5/B6: Per-run Responder instance with correct logDir + configurable interface
+  const networkInterface = config.engagement?.network_interface ?? 'eth0';
+  const responderManager = new ResponderManager(logDir);
   if (config.engagement?.type !== 'external') {
-    responderManager.start('eth0');
+    responderManager.start(networkInterface);
   }
 
   // Seed session.md -- shared context all agents can read
+  // P1: Include agent turn budgets so agents can self-manage their time
   writeFileSync(`${logDir}/memory/session.md`, [
     `# Wraith Session`,
     `Started: ${new Date().toISOString()}`,
@@ -364,6 +380,19 @@ export async function runWorkflow(configPath: string): Promise<void> {
     `- Phase: starting`,
     `- SOAR blocks: none yet`,
     `- Cracked credentials: none yet`,
+    ``,
+    `## Agent Turn Budgets`,
+    `Each agent has a fixed turn budget. When you have 20 turns remaining, write your evidence and stop.`,
+    `- osint-recon: 60 turns / 600s wall-clock`,
+    `- recon: 100 turns / 900s`,
+    `- sqli: 80 turns / 600s`,
+    `- cmdi: 80 turns / 600s`,
+    `- auth-attack: 80 turns / 600s`,
+    `- kerberoast: 120 turns / 600s`,
+    `- bruteforce: 100 turns / 900s`,
+    `- lateral: 150 turns / 1200s`,
+    `- privesc: 200 turns / 1200s`,
+    `- report: 100 turns / 600s`,
     ``,
     `## Instructions for all agents`,
     `Call memory_read() at the start of your run to load full session context.`,
@@ -395,9 +424,12 @@ export async function runWorkflow(configPath: string): Promise<void> {
       // v2 (Bugs 1/13): Force-record phase completion
       recordPhaseCompletion(logDir, phase, [result]);
     } else {
-      // Parallel phase -- run all agents concurrently with validation
+      // B1: Stagger parallel agents 12s apart to avoid OAuth rate limit
       const results = await Promise.allSettled(
-        phase.map(agentName => runAgentWithValidation(agentName, configPath, logDir))
+        phase.map((agentName, i) =>
+          new Promise<void>(resolve => setTimeout(resolve, i * 12_000))
+            .then(() => runAgentWithValidation(agentName, configPath, logDir))
+        )
       );
 
       const phaseResults = results.map((r, i) => ({

@@ -61,7 +61,7 @@ export async function runAgent(
 
     return {
       result: resultText,
-      success: true,
+      success: turns > 0,  // B2: 0 turns = rate limit hit, not a real success
       duration: Date.now() - start,
       turns,
     };

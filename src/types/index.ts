@@ -111,6 +111,7 @@ export interface WraithConfig {
   engagement?: {
     type: EngagementType;
     wan_ip?: string;                 // for external mode: pfSense WAN IP
+    network_interface?: string;      // B6: network interface for Responder (default: 'eth0')
     name?: string;
   };
   target: {

@@ -19,6 +19,10 @@ target:
     web_dvwa_user: "admin"
     web_dvwa_pass: "password"
 
+engagement:
+  type: internal
+  network_interface: "eth0"  # B6: Kali interface for Responder (eth0 on Parallels/Docker)
+
 attack:
   randomize: true         # random target selection + timing
   delay_min_sec: 5

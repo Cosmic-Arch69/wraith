@@ -39,13 +39,14 @@ export class ResponderManager {
 
     let child: ChildProcess;
     try {
-      child = spawn('responder', ['-I', networkInterface, '-wrf', '--lm'], {
+      // B3: Responder requires root to bind LLMNR:137/NBT-NS:138 -- run via sudo
+      child = spawn('sudo', ['responder', '-I', networkInterface, '-wrf', '--lm'], {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
     } catch (err: unknown) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === 'ENOENT') {
-        console.warn('[responder-manager] responder not found -- passive capture disabled');
+        console.warn('[responder-manager] sudo or responder not found -- passive capture disabled');
         return;
       }
       throw err;
@@ -53,7 +54,10 @@ export class ResponderManager {
 
     child.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'ENOENT') {
-        console.warn('[responder-manager] responder not found -- passive capture disabled');
+        console.warn('[responder-manager] sudo or responder not found -- passive capture disabled');
+        this.proc = null;
+      } else if (err.code === 'EACCES') {
+        console.warn('[responder-manager] sudo permission denied -- add passwordless sudo for responder in /etc/sudoers');
         this.proc = null;
       } else {
         console.error('[responder-manager] Process error:', err.message);
@@ -167,6 +171,12 @@ export class ResponderManager {
     );
 
     // Log to attacks.jsonl
+    // B4: Read cached source IP (written by tools.ts on first execute_command)
+    const sourceIpPath = join(this.logDir, 'source_ip.txt');
+    const sourceIp = existsSync(sourceIpPath)
+      ? readFileSync(sourceIpPath, 'utf-8').trim()
+      : 'unknown';
+
     const attacksPath = join(this.logDir, 'attacks.jsonl');
     const event: AttackEvent = {
       timestamp,
@@ -174,10 +184,10 @@ export class ResponderManager {
       technique: 'T1557.001',
       techniqueName: 'LLMNR/NBT-NS Poisoning and SMB Relay',
       target: {
-        ip: 'N/A',
+        ip: 'broadcast',
         user: `${domain}\\${username}`,
       },
-      sourceIp: 'localhost',
+      sourceIp,
       tool: 'responder',
       result: 'success',
       wazuhRuleExpected: '',
@@ -202,6 +212,4 @@ export class ResponderManager {
   }
 }
 
-export const responderManager = new ResponderManager(
-  process.env['WRAITH_LOG_DIR'] ?? './attack-logs',
-);
+// B5: No singleton -- instantiated per-run in runner.ts with the correct logDir

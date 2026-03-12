@@ -122,6 +122,23 @@ const CORE_PENTEST_TOOLS = [
       required: ['path'],
     },
   },
+  {
+    // I1: Repeated pre-attack hook -- check SOAR block + log intent in one call
+    name: 'preflight_check',
+    description: 'Run before any attack. Checks SOAR block status, logs attack intent, returns PROCEED or SKIP. Consolidates check_connectivity + graph_query + log_attack into one call.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        target_ip: { type: 'string', description: 'IP address of the target host' },
+        phase: { type: 'string', description: 'Attack phase name (e.g. "web", "lateral")' },
+        technique: { type: 'string', description: 'MITRE ATT&CK technique ID (e.g. "T1190")' },
+        technique_name: { type: 'string', description: 'Human-readable technique name' },
+        tool: { type: 'string', description: 'Tool about to be used' },
+        wazuh_rule: { type: 'string', description: 'Expected Wazuh rule ID' },
+      },
+      required: ['target_ip', 'phase', 'technique', 'technique_name', 'tool', 'wazuh_rule'],
+    },
+  },
 ];
 
 export const PENTEST_TOOLS = [
@@ -306,8 +323,65 @@ export function handleTool(name: string, input: Record<string, unknown>): string
       }
     }
 
+    case 'preflight_check': {
+      // I1: Consolidated pre-attack hook -- check block + log intent
+      const targetIp = input.target_ip as string;
+      const phase = input.phase as string;
+      const technique = input.technique as string;
+      const techniqueName = input.technique_name as string;
+      const tool = input.tool as string;
+      const wazuhRule = input.wazuh_rule as string;
+
+      // 1. Check connectivity
+      let reachable = true;
+      try {
+        const connectResult = execSync(`ping -c 1 -W 3 ${targetIp} 2>&1 | tail -1`, {
+          timeout: 10000, encoding: 'utf-8',
+        });
+        if (connectResult.includes('100% packet loss') || connectResult.includes('Unreachable')) {
+          reachable = false;
+        }
+      } catch {
+        reachable = false;
+      }
+
+      if (!reachable) {
+        // Log the skip event
+        const skipEvent: AttackEvent = {
+          timestamp: new Date().toISOString(),
+          phase,
+          technique,
+          techniqueName,
+          target: { ip: targetIp },
+          sourceIp: getSourceIp(),
+          tool,
+          result: 'blocked',
+          wazuhRuleExpected: wazuhRule,
+          details: `SOAR block or host down detected via preflight_check -- skipping attack on ${targetIp}`,
+        };
+        appendFileSync(ATTACK_LOG, JSON.stringify(skipEvent) + '\n');
+        return `SKIP: host ${targetIp} is not reachable (SOAR block or down)`;
+      }
+
+      // 2. Log intent (BEFORE log)
+      const intentEvent: AttackEvent = {
+        timestamp: new Date().toISOString(),
+        phase,
+        technique,
+        techniqueName,
+        target: { ip: targetIp },
+        sourceIp: getSourceIp(),
+        tool,
+        result: 'failed',  // placeholder -- will be updated by agent after actual attempt
+        wazuhRuleExpected: wazuhRule,
+        details: `ATTEMPTING: ${techniqueName} against ${targetIp}`,
+      };
+      appendFileSync(ATTACK_LOG, JSON.stringify(intentEvent) + '\n');
+
+      return `PROCEED: ${targetIp} is reachable. Intent logged. Execute your attack and call log_attack() with the actual result.`;
+    }
+
     default: {
-      // Delegate to cred or graph tools if not found in main switch
       if (['cred_add', 'cred_query', 'generate_mutations'].includes(name)) {
         return handleCredTool(name, input);
       }

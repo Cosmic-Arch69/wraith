@@ -22,6 +22,7 @@ interface ReconHost {
   }>;
   services?: string[] | Record<string, Record<string, string>>;
   open_ports?: number[];
+  critical_findings?: string[];
   web_url?: string;
   web_app?: string;
 }
@@ -110,6 +111,20 @@ export class GraphBuilder {
       if (host.open_ports) {
         for (const port of host.open_ports) {
           this.seedVectorsFromPort(port, '', vectors);
+        }
+      }
+
+      // v3.2.0 BUG-19: Parse critical_findings from recon and update access_level
+      if (host.critical_findings) {
+        for (const finding of host.critical_findings) {
+          const lower = finding.toLowerCase();
+          if (lower.includes('system') && (lower.includes('webshell') || lower.includes('rce'))) {
+            (updates as Record<string, unknown>).access_level = 'system';
+          } else if (lower.includes('admin') && lower.includes('access')) {
+            (updates as Record<string, unknown>).access_level = 'admin';
+          }
+          if (!updates.notes) updates.notes = [];
+          (updates.notes as string[]).push(`[recon] ${finding.substring(0, 100)}`);
         }
       }
 

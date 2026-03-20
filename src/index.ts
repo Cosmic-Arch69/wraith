@@ -38,7 +38,7 @@ async function main() {
       }
 
       if (cli.dryRun) {
-        console.log(`\n  Wraith v3.1.0`);
+        console.log(`\n  Wraith v3.2.0`);
         console.log(`  Target: ${config.target.domain} (${config.target.dc})`);
         console.log(`  Mode: ${cli.legacy ? 'legacy (v2 DAG)' : 'adaptive pipeline (v3)'}`);
         console.log('\n  [dry-run] Validating prompts...');

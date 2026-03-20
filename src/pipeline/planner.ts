@@ -148,7 +148,7 @@ export class AttackPlanner {
       // v3.1.0 E4: Retry JSON parse before fallback (BUG-13 fix)
       let plan: ActionPlan | null = null;
       for (let attempt = 0; attempt < 2; attempt++) {
-        const result = await runAgent(prompt, 'planner', 'medium', {}, 10);
+        const result = await runAgent(prompt, 'planner', 'medium', {}, 20);  // v3.2.0 BUG-21: increased from 10
         if (!result.success || !result.result) continue;
         try {
           plan = this.extractJSON(result.result) as ActionPlan;

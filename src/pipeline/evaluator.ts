@@ -152,6 +152,19 @@ export class Evaluator {
       case 'success':
         graph.updateNode(ip, { status: 'up' });
         delta.nodes_updated.push(ip);
+        // v3.2.0 BUG-20: Recognize SYSTEM/admin access from ANY phase (including recon)
+        if (attack.details) {
+          const detailsLower = attack.details.toLowerCase();
+          if (detailsLower.includes('nt authority\\system') || detailsLower.includes('nt authority/system') ||
+              (detailsLower.includes('system') && (detailsLower.includes('webshell') || detailsLower.includes('rce')))) {
+            const node = graph.queryNode(ip);
+            const prev = node?.access_level ?? 'none';
+            if (prev !== 'system') {
+              graph.updateNode(ip, { access_level: 'system' });
+              delta.access_levels_changed.push({ ip, from: prev, to: 'system' });
+            }
+          }
+        }
         // If this was a lateral move, record edge
         if (attack.phase === 'lateral' || attack.technique.startsWith('T1021')) {
           // We don't know the source IP from the attack log alone,

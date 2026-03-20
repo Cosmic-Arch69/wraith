@@ -2,7 +2,7 @@
 // Stores attack facts and queries semantic memory for the planner
 // v3.1.0: Wraith agents store findings, planner queries for cross-run intelligence
 
-const DEFAULT_URL = 'http://100.91.167.11:8080/mcp';
+const DEFAULT_URL = 'http://10.0.0.21:8080/mcp';
 
 interface FactTriple {
   subject: string;

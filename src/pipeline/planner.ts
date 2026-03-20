@@ -2,10 +2,13 @@
 // Adapted from MiroFish simulation_config_generator + oasis_profile_generator patterns
 // v3: Closed-loop planner with budget tracking and fallback deterministic planning
 
+import { readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { runAgent } from '../ai/claude-executor.js';
 import { loadPrompt } from '../services/prompt-manager.js';
 import { AttackGraphService } from '../services/attack-graph.js';
 import { AGENT_TEMPLATE_LIBRARY } from '../session-manager.js';
+import { OpenMemoryClient } from './openmemory-client.js';
 import type {
   ActionPlan,
   AgentProfile,
@@ -107,6 +110,26 @@ export class AttackPlanner {
           return `### Round ${r.round}\n${agents}`;
         }).join('\n\n');
 
+    // v3.1.0 E2: Feed credential state to planner
+    const logDir = config.output.log_dir;
+    let credentialState = 'No credentials discovered yet.';
+    const credsPath = join(logDir, 'credentials.json');
+    if (existsSync(credsPath)) {
+      try {
+        const creds = JSON.parse(readFileSync(credsPath, 'utf-8'));
+        if (Array.isArray(creds) && creds.length > 0) {
+          credentialState = `${creds.length} credentials:\n${creds.map((c: Record<string, string>) => `- ${c.username}: scope=${c.scope}, source=${c.source}`).join('\n')}`;
+        }
+      } catch { /* skip */ }
+    }
+
+    // v3.1.0 C3: Query OpenMemory for cross-run context
+    let omContext = '';
+    try {
+      const om = new OpenMemoryClient();
+      omContext = await om.query(`wraith attack findings for ${config.target.domain}`);
+    } catch { omContext = 'OpenMemory unavailable.'; }
+
     try {
       const prompt = await loadPrompt('planner', {
         round: String(round),
@@ -118,17 +141,27 @@ export class AttackPlanner {
         available_templates: templates,
         round_history: historyStr,
         max_concurrent: String(budget.max_concurrent),
+        credential_state: credentialState,
+        openmemory_context: omContext,
       });
 
-      const result = await runAgent(prompt, 'planner', 'medium', {}, 10);
-
-      if (!result.success || !result.result) {
-        console.warn('[planner] LLM planning failed -- falling back to deterministic plan');
+      // v3.1.0 E4: Retry JSON parse before fallback (BUG-13 fix)
+      let plan: ActionPlan | null = null;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const result = await runAgent(prompt, 'planner', 'medium', {}, 10);
+        if (!result.success || !result.result) continue;
+        try {
+          plan = this.extractJSON(result.result) as ActionPlan;
+          plan.round = round;
+          break;
+        } catch {
+          if (attempt === 0) console.log('[planner] JSON parse failed, retrying...');
+        }
+      }
+      if (!plan) {
+        console.warn('[planner] LLM planning failed after 2 attempts -- deterministic fallback');
         return this.deterministicPlan(graphService, round, budget, config);
       }
-
-      const plan = this.extractJSON(result.result) as ActionPlan;
-      plan.round = round;
 
       // Validate: cap agents at budget
       const maxNew = budget.max_total_agents - budget.agents_spawned;
@@ -211,22 +244,31 @@ export class AttackPlanner {
   }
 
   private vectorToTemplate(vector: string): string | null {
+    // v3.1.0 E1: Expanded from 15 to 30+ entries
     const map: Record<string, string> = {
-      'web-app': 'sqli',
-      'sqli': 'sqli',
-      'cmdi': 'cmdi',
-      'auth-bypass': 'auth-attack',
-      'dvwa': 'sqli',
-      'smb-relay': 'lateral',
-      'smb-brute': 'bruteforce',
-      'psexec': 'lateral',
-      'winrm': 'lateral',
-      'rdp-brute': 'bruteforce',
-      'kerberoast': 'kerberoast',
-      'asreproast': 'kerberoast',
-      'ldap-enum': 'recon',
-      'ssh-brute': 'bruteforce',
-      'brute-force': 'bruteforce',
+      // Web exploitation
+      'web-app': 'sqli', 'sqli': 'sqli', 'cmdi': 'cmdi', 'auth-bypass': 'auth-attack',
+      'dvwa': 'sqli', 'dvwa-sqli': 'sqli', 'dvwa-cmdi': 'cmdi',
+      'dvwa-fileupload-rce': 'cmdi', 'dvwa-rfi': 'cmdi', 'php-rce': 'cmdi',
+      'xampp-misconfiguration': 'auth-attack', 'mariadb-direct-access': 'sqli',
+      'web-admin': 'auth-attack', 'pfsense-webgui-bruteforce': 'auth-attack',
+      // Credential attacks
+      'kerberoast': 'kerberoast', 'asreproast': 'kerberoast',
+      'smb-brute': 'bruteforce', 'rdp-brute': 'bruteforce', 'rdp-bruteforce': 'bruteforce',
+      'ssh-brute': 'bruteforce', 'ssh-bruteforce': 'bruteforce',
+      'brute-force': 'bruteforce', 'password-spray': 'bruteforce',
+      'rid-bruteforce': 'bruteforce',
+      // Lateral movement
+      'smb-relay': 'lateral', 'smb-lateral': 'lateral',
+      'psexec': 'lateral', 'winrm': 'lateral',
+      'ntlm-relay': 'lateral', 'impacket-attacks': 'lateral',
+      // Privilege escalation
+      'impacket-secretsdump-with-creds': 'privesc',
+      // Recon / enumeration
+      'port-scan': 'recon', 'service-enum': 'recon',
+      'ldap-enum': 'recon', 'smb-enum': 'recon', 'nat-traversal': 'recon',
+      // Automated scanning
+      'nuclei-scan': 'nuclei',
     };
     return map[vector] ?? null;
   }

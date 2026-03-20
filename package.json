@@ -1,6 +1,6 @@
 {
   "name": "wraith",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Autonomous AI penetration testing framework -- Claude agents vs enterprise environments",
   "type": "module",
   "bin": {

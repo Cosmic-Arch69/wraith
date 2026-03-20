@@ -109,8 +109,12 @@ export class ReportGenerator {
       max_tool_calls: String(reportConfig.react_max_iterations),
     });
 
-    // Run ReACT loop: send prompt, parse tool calls, inject observations, repeat
+    // v3.1.0 D3: Auto-prepend valid IPs for Findings section (anti-hallucination)
     let conversation = prompt;
+    if (section.title.toLowerCase().includes('finding')) {
+      const validHosts = this.toolGraphQuery({ query: 'summary' });
+      conversation = `IMPORTANT: Only reference IPs and hosts from this list:\n${validHosts}\n\nDo NOT invent IPs that are not listed above.\n\n${conversation}`;
+    }
     let toolCallCount = 0;
     const maxIterations = reportConfig.react_max_iterations;
 
@@ -145,11 +149,14 @@ export class ReportGenerator {
       }
 
       if (finalAnswerMatch) {
-        return `## ${section.title}\n\n${finalAnswerMatch[1].trim()}`;
+        // v3.1.0 D4: Strip duplicate numbered headers (BUG-12)
+        const cleaned = finalAnswerMatch[1].trim().replace(/^#{1,3}\s*\d+\.?\s*/gm, '');
+        return `## ${section.title}\n\n${cleaned}`;
       }
 
       // No tool calls and no final answer -- treat whole output as final
-      return `## ${section.title}\n\n${text}`;
+      const cleaned = text.replace(/^#{1,3}\s*\d+\.?\s*/gm, '');
+      return `## ${section.title}\n\n${cleaned}`;
     }
 
     // Max iterations reached
@@ -246,40 +253,56 @@ export class ReportGenerator {
     }
   }
 
-  // Tool 2: Search evidence files
+  // Tool 2: Search evidence files (v3.1.0 D1: validated sources, 20 lines, agent outputs)
   private toolEvidenceSearch(args: Record<string, string>): string {
     const keyword = args.keyword ?? '';
     const agentId = args.agent_id;
     const results: string[] = [];
 
-    const searchDir = this.logDir;
-    if (!existsSync(searchDir)) return 'No evidence directory found';
+    if (!existsSync(this.logDir)) return 'No evidence directory found';
 
-    const files = readdirSync(searchDir).filter(f =>
-      f.endsWith('.md') || f.endsWith('.json') || f.endsWith('.txt'),
-    );
+    // v3.1.0 D1: Only search validated evidence sources (not raw config or temp files)
+    const validFiles: string[] = [];
 
-    for (const file of files) {
+    // Core evidence files
+    for (const f of readdirSync(this.logDir)) {
+      if (f.endsWith('_evidence.md') || f.endsWith('_deliverable.json') ||
+          f.startsWith('agent-') && f.endsWith('-output.md') ||
+          f === 'attacks.jsonl' || f === 'credentials.json' || f === 'cracked_creds.json' ||
+          f === 'nuclei_evidence.md') {
+        validFiles.push(f);
+      }
+    }
+
+    // Memory files
+    const memDir = join(this.logDir, 'memory');
+    if (existsSync(memDir)) {
+      for (const f of readdirSync(memDir)) {
+        if (f.endsWith('.md')) validFiles.push(`memory/${f}`);
+      }
+    }
+
+    for (const file of validFiles) {
       if (agentId && !file.includes(agentId.split('-')[0])) continue;
 
       try {
-        const content = readFileSync(join(searchDir, file), 'utf-8');
+        const filePath = join(this.logDir, file);
+        const content = readFileSync(filePath, 'utf-8');
         if (keyword && !content.toLowerCase().includes(keyword.toLowerCase())) continue;
 
-        // Extract relevant lines
         const lines = content.split('\n');
         const matches = lines.filter(l =>
           l.toLowerCase().includes(keyword.toLowerCase()),
         );
         if (matches.length > 0) {
-          results.push(`**${file}:**\n${matches.slice(0, 5).join('\n')}`);
+          results.push(`**${file}:**\n${matches.slice(0, 20).join('\n')}`); // v3.1.0: 20 lines, not 5
         }
       } catch { /* skip */ }
     }
 
     return results.length > 0
       ? results.join('\n\n')
-      : `No evidence found for keyword "${keyword}"${agentId ? ` in agent ${agentId}` : ''}`;
+      : `No evidence found for keyword "${keyword}"${agentId ? ` in agent ${agentId}` : ''}. Note: only validated evidence files are searched.`;
   }
 
   // Tool 3: Detection analysis

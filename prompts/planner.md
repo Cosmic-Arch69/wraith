@@ -18,6 +18,14 @@ You are operating in round {{round}} of the engagement.
 
 {{available_templates}}
 
+## Credential State
+
+{{credential_state}}
+
+## Cross-Run Intelligence (from OpenMemory)
+
+{{openmemory_context}}
+
 ## Round History
 
 {{round_history}}

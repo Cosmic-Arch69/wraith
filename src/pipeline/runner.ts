@@ -1,6 +1,6 @@
-// Wraith v3 Adaptive Pipeline Runner
-// Replaces static DAG with closed-loop: Config -> Recon -> Ontology -> Graph -> Plan -> Attack Loop -> Report
-// RUN-5 fixes: exponential backoff, concurrency limiter, failure-aware replanning
+// Wraith v3.1.0 Adaptive Pipeline Runner
+// Closed-loop: Config -> Recon -> Nuclei -> Ontology -> Graph -> Plan -> Attack Loop -> Report
+// v3.1.0: Evidence pipeline fix, OpenMemory integration, nuclei step, credential injection
 
 import { readFileSync, mkdirSync, writeFileSync, existsSync, appendFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -19,6 +19,8 @@ import { GraphBuilder } from './graph-builder.js';
 import { Evaluator } from './evaluator.js';
 import { AttackPlanner } from './planner.js';
 import { ReportGenerator } from './report-react.js';
+import { NucleiScanner } from './nuclei-scanner.js';
+import { OpenMemoryClient } from './openmemory-client.js';
 import type {
   AgentProfile,
   AgentRoundResult,
@@ -104,6 +106,16 @@ async function spawnAgent(
     engagement_type: config.engagement?.type ?? 'internal',
   };
 
+  // v3.1.0 A3: Inject discovered credentials into agent context
+  const credsPath = join(logDir, 'credentials.json');
+  if (existsSync(credsPath)) {
+    try { baseVars.discovered_credentials = readFileSync(credsPath, 'utf-8').substring(0, 3000); } catch { /* skip */ }
+  }
+  const crackedPath = join(logDir, 'cracked_creds.json');
+  if (existsSync(crackedPath)) {
+    try { baseVars.cracked_credentials = readFileSync(crackedPath, 'utf-8').substring(0, 3000); } catch { /* skip */ }
+  }
+
   // Load prompt with profile vars
   const prompt = await loadPromptWithProfile(profile.prompt_template, profile, baseVars);
 
@@ -111,8 +123,8 @@ async function spawnAgent(
   const memory = loadMemoryContext(logDir);
   const fullPrompt = [memory, prompt].filter(Boolean).join('\n');
 
-  // Setup MCP servers
-  const mcpServers = {
+  // Setup MCP servers (v3.1.0 C1: add OpenMemory)
+  const mcpServers: Record<string, unknown> = {
     'wraith-tools': {
       command: 'node',
       args: [MCP_SERVER_PATH],
@@ -120,6 +132,10 @@ async function spawnAgent(
         WRAITH_LOG_DIR: logDir,
         WRAITH_AGENT_NAME: agentId,
       },
+    },
+    'openmemory': {
+      type: 'http',
+      url: process.env.OPENMEMORY_URL ?? 'http://100.91.167.11:8080/mcp',
     },
   };
 
@@ -166,12 +182,29 @@ async function spawnAgent(
     if (existsSync(join(logDir, f))) evidenceFiles.push(f);
   }
 
+  // v3.1.0 A1: Save full agent output to disk
+  if (result.result) {
+    try {
+      writeFileSync(join(logDir, `agent-${agentId}-output.md`), [
+        `# Agent: ${agentId}`,
+        `Template: ${profile.prompt_template}`,
+        `Target: ${profile.target_ip}`,
+        `Turns: ${result.turns ?? 0}`,
+        `Success: ${result.success}`,
+        `Duration: ${duration}ms`,
+        ``,
+        `## Output`,
+        result.result,
+      ].join('\n'));
+    } catch { /* non-critical */ }
+  }
+
   console.log(`  [done] ${agentId}: ${result.success ? 'SUCCESS' : 'FAILED'} (${result.turns ?? 0} turns, ${duration}ms)`);
 
   return {
     agent_id: agentId,
     success: result.success,
-    result_summary: result.result?.substring(0, 500) ?? 'No output',
+    result_summary: result.result?.substring(0, 2000) ?? 'No output',  // v3.1.0 A2: increased from 500
     duration_ms: duration,
     turns_used: result.turns ?? 0,
     evidence_files: evidenceFiles,
@@ -194,7 +227,7 @@ export async function runPipeline(configPath: string): Promise<void> {
     max_concurrent_agents: 3,
   };
 
-  console.log(`\n  Wraith v3.0.0 -- Adaptive Pipeline`);
+  console.log(`\n  Wraith v3.1.0 -- Adaptive Pipeline`);
   console.log(`  Target: ${config.target.domain} (${config.target.dc})`);
   console.log(`  Hosts:  ${config.target.hosts.map(h => h.ip).join(', ')}`);
   console.log(`  Budget: ${planning.max_rounds} rounds, ${planning.max_total_agents} agents, ${planning.max_concurrent_agents} concurrent`);
@@ -307,6 +340,17 @@ export async function runPipeline(configPath: string): Promise<void> {
   }
 
   // =====================================================
+  // 4.5 NUCLEI SCAN (automated CVE/misconfig -- no LLM)
+  // =====================================================
+  console.log('[pipeline] Phase: NUCLEI SCAN');
+  const nuclei = new NucleiScanner();
+  const targetURLs = config.target.hosts
+    .map(h => h.web_url ?? `http://${h.ip}`)
+    .filter(Boolean);
+  const nucleiFindings = await nuclei.scan(targetURLs, logDir, attackGraph);
+  console.log(`[pipeline] Nuclei: ${nucleiFindings} findings across ${targetURLs.length} targets`);
+
+  // =====================================================
   // 5. ONTOLOGY (LLM generates schema from recon)
   // =====================================================
   console.log('[pipeline] Phase: ONTOLOGY');
@@ -336,6 +380,8 @@ export async function runPipeline(configPath: string): Promise<void> {
   const limiter = new ConcurrencyLimiter(planning.max_concurrent_agents);
   const history: RoundResult[] = [];
   let agentsSpawned = 1; // recon counted
+  const usedAgentIds = new Set<string>(['recon-r0']); // v3.1.0 E3: track for dedup
+  const omClient = new OpenMemoryClient(); // v3.1.0 C2: for fact storage
 
   for (let round = 1; round <= planning.max_rounds; round++) {
     const budget = planner.getBudgetState(config, round - 1, agentsSpawned);
@@ -366,6 +412,16 @@ export async function runPipeline(configPath: string): Promise<void> {
       console.log('[pipeline] No agents to spawn -- ending.');
       break;
     }
+
+    // v3.1.0 E3: Enforce unique agent IDs (BUG-14 fix)
+    plan.agents_to_spawn = plan.agents_to_spawn.filter(a => {
+      if (usedAgentIds.has(a.id)) {
+        console.log(`  [dedup] Skipping duplicate agent ID: ${a.id}`);
+        return false;
+      }
+      usedAgentIds.add(a.id);
+      return true;
+    });
 
     // Resolve dependencies into batches
     const batches = planner.resolveDependencies(plan.agents_to_spawn);
@@ -413,6 +469,15 @@ export async function runPipeline(configPath: string): Promise<void> {
         // Evaluate result and update graph
         const delta = evaluator.evaluate(agentResult, logDir, attackGraph, credStore);
         roundResults.push(agentResult);
+
+        // v3.1.0 C2: Store facts to OpenMemory (fire-and-forget)
+        omClient.store(
+          `[Round ${round}] ${agentResult.agent_id}: ${agentResult.success ? 'SUCCESS' : 'FAILED'} -- ${agentResult.result_summary.substring(0, 200)}`,
+          ['wraith', `run-${Date.now()}`, agentResult.agent_id.split('-')[0]],
+          delta.access_levels_changed.map(c => ({
+            subject: c.ip, predicate: 'access_level', object: c.to,
+          })),
+        ).catch(() => { /* non-critical */ });
 
         // Merge deltas
         roundDelta.nodes_added.push(...delta.nodes_added);

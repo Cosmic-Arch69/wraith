@@ -20,7 +20,8 @@ interface ReconHost {
     version?: string;
     state?: string;
   }>;
-  services?: string[];
+  services?: string[] | Record<string, Record<string, string>>;
+  open_ports?: number[];
   web_url?: string;
   web_app?: string;
 }
@@ -89,8 +90,26 @@ export class GraphBuilder {
       }
 
       if (host.services) {
-        for (const svc of host.services) {
-          if (!services.includes(svc)) services.push(svc);
+        if (Array.isArray(host.services)) {
+          // Array format: ["http:80", "smb:445"]
+          for (const svc of host.services) {
+            if (!services.includes(svc)) services.push(svc);
+          }
+        } else if (typeof host.services === 'object') {
+          // Dict format: {"80": {proto: "http", ...}, "443": {...}} (BUG-8 fix)
+          for (const [port, info] of Object.entries(host.services as Record<string, Record<string, string>>)) {
+            const proto = info?.proto ?? info?.protocol ?? 'unknown';
+            const svc = `${proto}:${port}`;
+            if (!services.includes(svc)) services.push(svc);
+            this.seedVectorsFromPort(parseInt(port, 10), proto, vectors);
+          }
+        }
+      }
+
+      // Also use open_ports array if available (BUG-8: recon may provide this)
+      if (host.open_ports) {
+        for (const port of host.open_ports) {
+          this.seedVectorsFromPort(port, '', vectors);
         }
       }
 

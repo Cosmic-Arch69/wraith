@@ -14,6 +14,12 @@ export interface ExecutorResult {
   turns?: number;
 }
 
+// v3.0.1: Handle for cancelling a running agent (BUG-7 fix)
+export interface ExecutorHandle {
+  promise: Promise<ExecutorResult>;
+  abort: () => void;
+}
+
 class RateLimitError extends Error {
   constructor(agentName: string) {
     super(`Agent ${agentName} completed 0 turns (rate limited)`);
@@ -27,6 +33,7 @@ async function executeAgent(
   modelTier: ModelTier,
   mcpServers: Record<string, unknown>,
   maxTurns: number,
+  abortController?: AbortController,
 ): Promise<ExecutorResult> {
   const start = Date.now();
 
@@ -59,6 +66,7 @@ async function executeAgent(
         allowDangerouslySkipPermissions: true,
         mcpServers: mcpServers as Record<string, import('@anthropic-ai/claude-agent-sdk').McpServerConfig>,
         env: sdkEnv,
+        abortController,
       },
     })) {
       turns++;
@@ -80,6 +88,15 @@ async function executeAgent(
     };
   } catch (err) {
     if (err instanceof RateLimitError) throw err;
+    // AbortError is expected when we cancel via AbortController
+    if (abortController?.signal.aborted) {
+      return {
+        result: null,
+        success: false,
+        duration: Date.now() - start,
+        turns,
+      };
+    }
     console.error(`[${agentName}] Error:`, err);
     return {
       result: null,
@@ -100,7 +117,7 @@ export async function runAgent(
 ): Promise<ExecutorResult> {
   try {
     return await withBackoff(
-      () => executeAgent(prompt, agentName, modelTier, mcpServers, maxTurns),
+      () => executeAgent(prompt, agentName, modelTier, mcpServers, maxTurns, undefined),
       (err) => err instanceof RateLimitError,
       {
         baseDelayMs: 15_000,
@@ -125,4 +142,24 @@ export async function runAgent(
     }
     throw err;
   }
+}
+
+// v3.0.1: Start an agent with an AbortController for cancellation (BUG-7 fix)
+// Returns a handle with the promise + abort function so the caller can kill it on timeout.
+export function startAgent(
+  prompt: string,
+  agentName: string,
+  modelTier: ModelTier = 'medium',
+  mcpServers: Record<string, unknown> = {},
+  maxTurns: number = 150,
+): ExecutorHandle {
+  const controller = new AbortController();
+  const promise = executeAgent(prompt, agentName, modelTier, mcpServers, maxTurns, controller);
+  return {
+    promise,
+    abort: () => {
+      console.log(`  [abort] ${agentName} -- killing SDK process via AbortController`);
+      controller.abort();
+    },
+  };
 }

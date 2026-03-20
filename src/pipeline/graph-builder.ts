@@ -112,10 +112,13 @@ export class GraphBuilder {
     }
 
     // Create edges: all hosts connect to DC (if DC discovered)
+    // BUG-4 fix: guard empty DC IP
     const dcIp = recon.dc_ip ?? config.target.dc;
-    for (const host of hosts) {
-      if (host.ip !== dcIp) {
-        graphService.addEdge(host.ip, dcIp, 'domain-member');
+    if (dcIp) {
+      for (const host of hosts) {
+        if (host.ip !== dcIp) {
+          graphService.addEdge(host.ip, dcIp, 'domain-member');
+        }
       }
     }
 
@@ -128,7 +131,7 @@ export class GraphBuilder {
   private seedFromConfig(graphService: AttackGraphService, config: WraithV3Config): void {
     for (const host of config.target.hosts) {
       graphService.initNode(host.ip, host.name);
-      const vectors: string[] = [];
+      const vectors: string[] = ['port-scan', 'service-enum'];  // BUG-5 fix: always viable
       if (host.web_url) vectors.push('web-app');
       if (host.web_app === 'dvwa') vectors.push('dvwa');
       graphService.updateNode(host.ip, {
@@ -136,7 +139,10 @@ export class GraphBuilder {
         vectors_open: vectors,
       });
     }
-    graphService.initNode(config.target.dc, 'DC');
+    // BUG-4 fix: guard empty DC IP
+    if (config.target.dc) {
+      graphService.initNode(config.target.dc, 'DC');
+    }
   }
 
   private seedVectorsFromPort(port: number, service: string, vectors: string[]): void {

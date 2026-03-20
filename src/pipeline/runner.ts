@@ -6,7 +6,7 @@ import { readFileSync, mkdirSync, writeFileSync, existsSync, appendFileSync, rea
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import yaml from 'js-yaml';
-import { runAgent as claudeRun } from '../ai/claude-executor.js';
+import { startAgent } from '../ai/claude-executor.js';
 import { loadPromptWithProfile } from '../services/prompt-manager.js';
 import { processManager } from '../services/process-manager.js';
 import { PotWatcher } from '../services/pot-watcher.js';
@@ -45,6 +45,32 @@ function loadMemoryContext(logDir: string): string {
   } catch {
     return '';
   }
+}
+
+// BUG-1 fix: Validate recon output (ported from runner-legacy.ts validatePhaseOutput)
+function validateReconOutput(logDir: string): { valid: boolean; missing: string[] } {
+  const missing: string[] = [];
+  const deliverable = join(logDir, 'recon_deliverable.json');
+
+  if (!existsSync(deliverable)) {
+    missing.push('recon_deliverable.json does not exist');
+  } else {
+    const content = readFileSync(deliverable, 'utf-8');
+    if (content.length < 50) {
+      missing.push(`recon_deliverable.json is too small (${content.length} chars, expected >= 50)`);
+    } else {
+      try {
+        const data = JSON.parse(content);
+        if (!data.hosts && !data.live_hosts) {
+          missing.push('recon_deliverable.json missing hosts data');
+        }
+      } catch {
+        missing.push('recon_deliverable.json is not valid JSON');
+      }
+    }
+  }
+
+  return { valid: missing.length === 0, missing };
 }
 
 async function spawnAgent(
@@ -97,12 +123,12 @@ async function spawnAgent(
     },
   };
 
-  // Wall-clock timeout
+  // Wall-clock timeout with cancellation (BUG-7 fix)
   const timeoutPromise = new Promise<null>(resolve =>
     setTimeout(() => resolve(null), profile.timeout_sec * 1000),
   );
 
-  const resultPromise = claudeRun(
+  const handle = startAgent(
     fullPrompt,
     agentId,
     profile.model_tier,
@@ -110,11 +136,12 @@ async function spawnAgent(
     profile.turn_budget,
   );
 
-  const result = await Promise.race([resultPromise, timeoutPromise]);
+  const result = await Promise.race([handle.promise, timeoutPromise]);
   const duration = Date.now() - start;
 
   if (result === null) {
-    // Timeout
+    // Timeout -- actually kill the SDK process
+    handle.abort();
     console.log(`  [timeout] ${agentId} killed after ${profile.timeout_sec}s`);
     return {
       agent_id: agentId,
@@ -200,9 +227,12 @@ export async function runPipeline(configPath: string): Promise<void> {
     });
   }
 
-  // Seed graph with known hosts
+  // Seed graph with known hosts (BUG-4/5 fix: guard empty DC)
   for (const host of config.target.hosts) {
     attackGraph.initNode(host.ip, host.name);
+  }
+  if (config.target.dc) {
+    attackGraph.initNode(config.target.dc, 'DC');
   }
 
   // 3. Start Responder (if internal engagement)
@@ -240,7 +270,7 @@ export async function runPipeline(configPath: string): Promise<void> {
     id: 'recon-r0',
     technique: 'T1046',
     technique_name: 'Network Scanning',
-    target_ip: config.target.dc,
+    target_ip: config.target.dc || config.target.hosts[0]?.ip || '',  // BUG-3 fix: fallback to first host in external mode
     prompt_template: 'recon',
     model_tier: 'medium',
     turn_budget: 100,
@@ -256,6 +286,24 @@ export async function runPipeline(configPath: string): Promise<void> {
     potWatcher.stop();
     responderManager.stop();
     throw new Error('Recon failed -- cannot proceed without target map');
+  }
+
+  // BUG-1 fix: Validate recon output -- retry if deliverable missing
+  const reconValidation = validateReconOutput(logDir);
+  if (!reconValidation.valid) {
+    console.log(`[pipeline] Recon output invalid: ${reconValidation.missing.join(', ')} -- retrying`);
+    const retryProfile: AgentProfile = {
+      ...reconProfile,
+      id: 'recon-r0-retry',
+      context_vars: {
+        round_context: `RETRY: Previous recon reported success but produced NO deliverable file. You MUST run nmap against all target hosts and write the results to recon_deliverable.json. Missing: ${reconValidation.missing.join(', ')}. Target hosts: ${config.target.hosts.map(h => h.ip).join(', ')}`,
+      },
+    };
+    await spawnAgent(retryProfile, config, logDir);
+    const recheck = validateReconOutput(logDir);
+    if (!recheck.valid) {
+      console.warn(`[pipeline] Recon retry also failed: ${recheck.missing.join(', ')} -- continuing with config-only graph`);
+    }
   }
 
   // =====================================================

@@ -21,6 +21,12 @@ const MAX_EDGE_TYPES = 10;
 
 export class OntologyGenerator {
   async generate(reconData: string, _config: WraithV3Config): Promise<AttackOntology> {
+    // BUG-2 fix: skip LLM call when recon data is empty (saves API call)
+    if (!reconData || reconData.trim().length < 10) {
+      console.log('[ontology] No recon data available -- using fallback ontology');
+      return this.fallbackOntology();
+    }
+
     console.log('[ontology] Generating attack ontology from recon data...');
 
     const prompt = await loadPrompt('ontology', {

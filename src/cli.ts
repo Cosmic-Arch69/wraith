@@ -1,4 +1,5 @@
 // Wraith CLI -- argument parsing
+// v3: Added --legacy, --max-rounds, --max-agents, --objective flags
 
 import { parseArgs } from 'node:util';
 
@@ -11,6 +12,10 @@ export interface CliArgs {
   follow: boolean;
   dryRun: boolean;
   engagement?: string;
+  legacy: boolean;
+  maxRounds?: number;
+  maxAgents?: number;
+  objective?: string;
 }
 
 export function parseCli(): CliArgs {
@@ -25,6 +30,10 @@ export function parseCli(): CliArgs {
       follow:      { type: 'boolean', short: 'f', default: false },
       'dry-run':   { type: 'boolean', short: 'd', default: false },
       engagement:  { type: 'string',  short: 'e' },
+      legacy:      { type: 'boolean', default: false },
+      'max-rounds': { type: 'string' },
+      'max-agents': { type: 'string' },
+      objective:   { type: 'string',  short: 'o' },
     },
     strict: false,
   });
@@ -36,23 +45,32 @@ export function parseCli(): CliArgs {
     follow: values.follow as boolean,
     dryRun: values['dry-run'] as boolean,
     engagement: values.engagement as string | undefined,
+    legacy: values.legacy as boolean,
+    maxRounds: values['max-rounds'] ? parseInt(values['max-rounds'] as string, 10) : undefined,
+    maxAgents: values['max-agents'] ? parseInt(values['max-agents'] as string, 10) : undefined,
+    objective: values.objective as string | undefined,
   };
 }
 
 export function printUsage() {
   console.log(`
-  Wraith -- Autonomous AI Pentesting Framework
+  Wraith v3.0.0 -- Autonomous AI Pentesting Framework
 
   Usage:
-    wraith run   [--config <path>] [--dry-run]   Start a pentest workflow
+    wraith run   [--config <path>] [--dry-run]   Start adaptive pipeline
+    wraith run   --legacy [--config <path>]       Run v2 static DAG mode
     wraith status --workflow-id <id>             Check workflow status
     wraith logs  [--follow]                      Tail attack log
 
   Options:
     -c, --config       Config file path (default: configs/yashnet-lab.yaml)
-    -w, --workflow-id  Temporal workflow ID (for status command)
-    -f, --follow       Follow log output (for logs command)
     -d, --dry-run      Validate config + prompts without executing
     -e, --engagement   Override engagement type (external, internal, assumed-breach)
+    -o, --objective    Set objective (full_assessment, domain_admin, web_only, cred_harvest)
+    --legacy           Use v2 static DAG runner instead of adaptive pipeline
+    --max-rounds       Override max attack rounds (default: 10)
+    --max-agents       Override max total agents (default: 30)
+    -f, --follow       Follow log output (for logs command)
+    -w, --workflow-id  Workflow ID (for status command, legacy)
   `);
 }

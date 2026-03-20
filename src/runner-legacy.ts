@@ -198,6 +198,38 @@ function generateReportInput(logDir: string): void {
   console.log(`  [runner] Generated report_input.json`);
 }
 
+// v2.1.2 Bug 2: Save cracked credentials to file so lateral/privesc agents can read them
+function saveCrackedCredentials(credStore: CredentialStore, logDir: string): void {
+  const all = credStore.getAll();
+  const cracked = all.filter(c => c.password !== undefined);
+  writeFileSync(join(logDir, 'cracked_creds.json'), JSON.stringify({
+    count: cracked.length,
+    total: all.length,
+    cracked: cracked.map(c => ({
+      user: c.username,
+      password: c.password,
+      domain: c.scope === 'domain' ? 'YASHNET.local' : 'local',
+      source: c.source,
+      scope: c.scope,
+    }))
+  }, null, 2));
+  console.log(`  [runner] Saved ${cracked.length} cracked credentials to cracked_creds.json`);
+}
+
+// v2.1.2 Bug 6: Generate placeholder evidence for failed/timed-out agents
+function generatePlaceholderEvidence(agentName: AgentName, logDir: string): void {
+  const agentDef = AGENTS[agentName];
+  if (!agentDef) return;
+  const deliverable = agentDef.deliverableFilename;
+  if (!deliverable) return;
+  const filePath = join(logDir, deliverable);
+  if (!existsSync(filePath)) {
+    const placeholder = `# ${agentName} Evidence\n\nNo evidence generated -- agent failed or timed out.\nTimestamp: ${new Date().toISOString()}\n`;
+    writeFileSync(filePath, placeholder);
+    console.log(`  [runner] Generated placeholder evidence for ${agentName}`);
+  }
+}
+
 export async function runAgent(
   agentName: AgentName,
   configPath: string,
@@ -232,7 +264,10 @@ export async function runAgent(
     'wraith-tools': {
       command: 'node',
       args: [MCP_SERVER_PATH],
-      env: { WRAITH_LOG_DIR: logDir },
+      env: {
+        WRAITH_LOG_DIR: logDir,
+        WRAITH_AGENT_NAME: agentName,  // v2.1.2 Bug 4: pass agent identity for role boundary enforcement
+      },
     },
   };
 
@@ -267,6 +302,15 @@ export async function runAgent(
 
   if (result.result?.startsWith('TIMEOUT:')) {
     console.log(`  [timeout] ${agentName} killed after ${wallClockSec}s`);
+    // v2.1.2 Bug 1: Timeout with 0 turns should retry (was unreachable -- timeout sets result to string, not null)
+    if (result.turns === 0 || result.turns === undefined) {
+      console.log(`  [retry] ${agentName} completed 0 turns (timeout) -- retrying after 30s`);
+      await new Promise(r => setTimeout(r, 30_000));
+      const retryResult = await runAgent(agentName, configPath, 'TIMEOUT_RETRY: Previous run hit time limit with 0 turns. Proceed with your task normally.');
+      if (retryResult.success) {
+        return { success: retryResult.success, result: retryResult.result };
+      }
+    }
     appendFileSync(`${logDir}/memory/session.md`, `\n- [TIMEOUT] ${agentName} exceeded ${wallClockSec}s -- partial results may exist\n`);
   }
 
@@ -300,7 +344,6 @@ async function runAgentWithValidation(
     const validation = validatePhaseOutput(agentName, logDir);
     if (!validation.valid) {
       console.log(`  [validation] ${agentName} reported success but missing output: ${validation.missing.join(', ')}`);
-      // Retry once with explicit context about what's missing
       const retryCtx = `Your previous run reported success but did NOT produce the expected output: ${validation.missing.join('; ')}. You MUST actually execute the commands and produce these files. Do not skip or summarize.`;
       const retryResult = await runAgent(agentName, configPath, retryCtx);
       if (retryResult.success) {
@@ -311,6 +354,11 @@ async function runAgentWithValidation(
       }
       return { name: agentName, success: retryResult.success };
     }
+  }
+
+  // v2.1.2 Bug 6: Generate placeholder evidence for failed agents so report phase has complete input
+  if (!result.success) {
+    generatePlaceholderEvidence(agentName, logDir);
   }
 
   return { name: agentName, success: result.success };
@@ -363,6 +411,10 @@ export async function runWorkflow(configPath: string): Promise<void> {
   const responderManager = new ResponderManager(logDir);
   if (config.engagement?.type !== 'external') {
     responderManager.start(networkInterface);
+    // v2.1.2 Bug 5: Check if responder actually started
+    if (responderManager.getStartError()) {
+      console.warn(`[runner] Responder failed: ${responderManager.getStartError()?.message} -- continuing without passive NTLM capture`);
+    }
   }
 
   // Seed session.md -- shared context all agents can read
@@ -440,6 +492,19 @@ export async function runWorkflow(configPath: string): Promise<void> {
       const failed = phaseResults.filter(r => !r.success).map(r => r.name);
       if (failed.length > 0) {
         console.log(`  [warn] These agents failed: ${failed.join(', ')} -- continuing`);
+      }
+
+      // v2.1.2 Bug 2: Save cracked credentials after credential-gathering phases
+      const credPhases: AgentName[] = ['auth-attack', 'bruteforce', 'kerberoast'];
+      if (phase.some(a => credPhases.includes(a))) {
+        saveCrackedCredentials(credStore, logDir);
+      }
+
+      // v2.1.2 Bug 6: Generate placeholder evidence for failed parallel agents
+      for (const pr of phaseResults) {
+        if (!pr.success) {
+          generatePlaceholderEvidence(pr.name, logDir);
+        }
       }
 
       // v2 (Bugs 1/13): Force-record phase completion

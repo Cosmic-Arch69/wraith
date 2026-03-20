@@ -123,10 +123,15 @@ Write to: `{{logDir}}/auth_attack_evidence.md`
 ## Auth Attack Findings
 - Accounts cracked: [user:pass list]
 - Hosts attacked: [list]
+- RCE achieved: [yes/no -- if yes, include host, user, method]
 - Wazuh rules triggered: [list]
 - SOAR fired: yes/no
 ```
 If creds were cracked, also call `memory_append("session", "- Cracked web creds: user:pass")`.
+
+**v2.1.2: If you achieve RCE (command execution on target):**
+Call `memory_append("session", "- **WEB RCE ACHIEVED**: host={{web_host}}, user=[whoami output], method=[ssti|cmdi|file-upload|jwt]")`.
+This is critical -- lateral and privesc agents will read this to pivot from web to domain.
 
 ## v2.1: Credential Tagging (F2)
 After any successful auth, call `cred_add` with appropriate scope:

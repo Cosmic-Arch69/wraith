@@ -25,6 +25,7 @@ export class ResponderManager {
   private captureFile: string;
   private seen: Set<string> = new Set();
   private interval: ReturnType<typeof setInterval> | null = null;
+  private startError: Error | null = null;  // v2.1.2 Bug 5: track startup errors
 
   constructor(logDir: string) {
     this.logDir = logDir;
@@ -44,6 +45,7 @@ export class ResponderManager {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
     } catch (err: unknown) {
+      this.startError = err as Error;  // v2.1.2 Bug 5: store error
       const code = (err as NodeJS.ErrnoException).code;
       if (code === 'ENOENT') {
         console.warn('[responder-manager] sudo or responder not found -- passive capture disabled');
@@ -53,6 +55,7 @@ export class ResponderManager {
     }
 
     child.on('error', (err: NodeJS.ErrnoException) => {
+      this.startError = err;  // v2.1.2 Bug 5: store error
       if (err.code === 'ENOENT') {
         console.warn('[responder-manager] sudo or responder not found -- passive capture disabled');
         this.proc = null;
@@ -65,6 +68,9 @@ export class ResponderManager {
     });
 
     child.on('exit', (code) => {
+      if (code !== 0) {
+        this.startError = new Error(`Responder exited with code ${code}`);
+      }
       console.log(`[responder-manager] Process exited with code ${String(code)}`);
       this.proc = null;
     });
@@ -205,6 +211,11 @@ export class ResponderManager {
     } catch {
       return [];
     }
+  }
+
+  // v2.1.2 Bug 5: expose startup error state
+  getStartError(): Error | null {
+    return this.startError;
   }
 
   isRunning(): boolean {

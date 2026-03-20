@@ -66,9 +66,9 @@ export const GRAPH_TOOLS = [
       properties: {
         query_type: {
           type: 'string',
-          enum: ['node', 'all', 'blocked', 'open_vectors', 'summary', 'detect_block'],
+          enum: ['node', 'all', 'blocked', 'open_vectors', 'summary', 'detect_block', 'by_entity_type', 'detailed_summary', 'viable_attack_paths'],
           description:
-            'node: single host details | all: full graph JSON | blocked: IPs with status=blocked | open_vectors: viable attack paths | summary: markdown overview | detect_block: check if IP is being blocked by SOAR',
+            'node: single host details | all: full graph JSON | blocked: IPs with status=blocked | open_vectors: viable attack paths | summary: markdown overview | detect_block: check if IP is being blocked by SOAR | by_entity_type: filter by entity_type | detailed_summary: rich planner output | viable_attack_paths: ordered viable vectors',
         },
         ip: {
           type: 'string',
@@ -182,6 +182,26 @@ export function handleGraphTool(name: string, input: Record<string, unknown>): s
           return isBlocked
             ? `BLOCKED: SOAR block detected for ${ip} -- last response times triggered threshold`
             : `OK: No block pattern detected for ${ip}`;
+        }
+
+        case 'by_entity_type': {
+          const entityType = ip; // reuse ip param for entity type
+          if (!entityType) return 'graph_query error: ip param (used as entity_type) is required for by_entity_type';
+          const nodes = svc.queryByEntityType(entityType);
+          if (nodes.length === 0) return `No nodes with entity_type="${entityType}"`;
+          return JSON.stringify(nodes, null, 2);
+        }
+
+        case 'detailed_summary': {
+          return svc.getDetailedSummary();
+        }
+
+        case 'viable_attack_paths': {
+          const viableVectors = svc.getViableVectors();
+          if (viableVectors.length === 0) return 'No viable attack paths remaining';
+          return viableVectors
+            .map((v, i) => `${i + 1}. ${v.host} (${v.ip}) [priority=${v.priority}]: ${v.vectors.join(', ')}`)
+            .join('\n');
         }
 
         default:

@@ -1,14 +1,16 @@
 #!/usr/bin/env node
-// Wraith CLI entry point -- no external services required
+// Wraith v3.0.0 CLI entry point
+// Default: adaptive pipeline. --legacy: v2 static DAG.
 
 import 'dotenv/config';
 import { readFileSync, existsSync, createReadStream } from 'node:fs';
 import { join } from 'node:path';
 import { parseCli, printUsage } from './cli.js';
-import { runWorkflow } from './runner.js';
+import { runPipeline } from './pipeline/runner.js';
+import { runWorkflow } from './runner-legacy.js';
 import { loadPrompt } from './services/prompt-manager.js';
 import { AGENTS } from './session-manager.js';
-import type { WraithConfig } from './types/index.js';
+import type { WraithV3Config } from './types/index.js';
 import yaml from 'js-yaml';
 
 const cli = parseCli();
@@ -22,13 +24,23 @@ async function main() {
         process.exit(1);
       }
 
-      const config = yaml.load(readFileSync(cli.config, 'utf-8')) as WraithConfig;
-      console.log(`\n  Wraith v0.1.0`);
-      console.log(`  Target: ${config.target.domain} (${config.target.dc})`);
-      console.log(`  Hosts:  ${config.target.hosts.map(h => h.ip).join(', ')}`);
-      console.log(`  Config: ${cli.config}`);
+      const config = yaml.load(readFileSync(cli.config, 'utf-8')) as WraithV3Config;
+
+      // Apply CLI overrides to planning config
+      if (cli.maxRounds || cli.maxAgents || cli.objective) {
+        config.planning = {
+          max_rounds: cli.maxRounds ?? config.planning?.max_rounds ?? 10,
+          max_total_agents: cli.maxAgents ?? config.planning?.max_total_agents ?? 30,
+          max_concurrent_agents: config.planning?.max_concurrent_agents ?? 3,
+          objective: cli.objective ?? config.planning?.objective ?? 'full_assessment',
+          stealth_mode: config.planning?.stealth_mode ?? false,
+        };
+      }
 
       if (cli.dryRun) {
+        console.log(`\n  Wraith v3.0.0`);
+        console.log(`  Target: ${config.target.domain} (${config.target.dc})`);
+        console.log(`  Mode: ${cli.legacy ? 'legacy (v2 DAG)' : 'adaptive pipeline (v3)'}`);
         console.log('\n  [dry-run] Validating prompts...');
         const firstWebHost = config.target.hosts.find(h => h.web_url);
         for (const [name, agent] of Object.entries(AGENTS)) {
@@ -49,6 +61,8 @@ async function main() {
             web_dvwa_pass: config.target.credentials.web_dvwa_pass ?? 'password',
             wan_ip: config.engagement?.wan_ip ?? '',
             engagement_type: config.engagement?.type ?? 'internal',
+            agent_id: '',
+            round_context: '',
           });
           const unresolved = prompt.match(/\{\{[^}]+\}\}/g);
           const status = unresolved ? `WARN (unresolved: ${unresolved.join(', ')})` : 'OK';
@@ -58,7 +72,12 @@ async function main() {
         return;
       }
 
-      await runWorkflow(cli.config);
+      if (cli.legacy) {
+        console.log(`\n  Wraith v3.0.0 (legacy mode)`);
+        await runWorkflow(cli.config);
+      } else {
+        await runPipeline(cli.config);
+      }
       break;
     }
 
@@ -70,16 +89,14 @@ async function main() {
       }
       const lines = readFileSync(logFile, 'utf-8').trim().split('\n').filter(Boolean);
       const events = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
-      const byResult = events.reduce((acc: Record<string, number>, e) => {
-        acc[e.result] = (acc[e.result] ?? 0) + 1;
+      const byResult = events.reduce((acc: Record<string, number>, e: Record<string, unknown>) => {
+        const r = e.result as string;
+        acc[r] = (acc[r] ?? 0) + 1;
         return acc;
       }, {});
       console.log(`\n  Attack log: ${lines.length} events`);
       for (const [result, count] of Object.entries(byResult)) {
         console.log(`  ${result}: ${count}`);
-      }
-      if (cli.workflowId) {
-        console.log(`  (--workflow-id is ignored in solo mode)`);
       }
       break;
     }

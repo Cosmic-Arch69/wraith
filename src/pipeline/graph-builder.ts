@@ -1,0 +1,192 @@
+// Graph builder -- constructs typed attack graph from recon data + ontology
+// Adapted from MiroFish graph_builder.py pattern (without Zep -- uses local AttackGraphService)
+// v3: Parses recon deliverable JSON, creates typed nodes/edges, seeds initial vectors
+
+import { readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { AttackGraphService } from '../services/attack-graph.js';
+import type { AttackOntology, WraithV3Config } from '../types/index.js';
+
+interface ReconHost {
+  ip: string;
+  hostname?: string;
+  name?: string;
+  os?: string;
+  status?: string;
+  ports?: Array<{
+    port: number;
+    protocol?: string;
+    service?: string;
+    version?: string;
+    state?: string;
+  }>;
+  services?: string[];
+  web_url?: string;
+  web_app?: string;
+}
+
+interface ReconDeliverable {
+  hosts?: ReconHost[];
+  live_hosts?: ReconHost[];
+  domain?: string;
+  dc_ip?: string;
+  scan_time?: string;
+}
+
+export class GraphBuilder {
+  buildFromRecon(
+    logDir: string,
+    ontology: AttackOntology,
+    graphService: AttackGraphService,
+    config: WraithV3Config,
+  ): void {
+    console.log('[graph-builder] Building typed graph from recon data...');
+
+    const reconPath = join(logDir, 'recon_deliverable.json');
+    if (!existsSync(reconPath)) {
+      console.warn('[graph-builder] No recon_deliverable.json found -- using config hosts only');
+      this.seedFromConfig(graphService, config);
+      return;
+    }
+
+    let recon: ReconDeliverable;
+    try {
+      recon = JSON.parse(readFileSync(reconPath, 'utf-8'));
+    } catch (err) {
+      console.warn(`[graph-builder] Failed to parse recon_deliverable.json: ${err}`);
+      this.seedFromConfig(graphService, config);
+      return;
+    }
+
+    const hosts = recon.hosts ?? recon.live_hosts ?? [];
+
+    for (const host of hosts) {
+      const ip = host.ip;
+      const hostname = host.hostname ?? host.name ?? ip;
+
+      // Init or update node
+      graphService.initNode(ip, hostname);
+
+      // Set entity_type via update
+      const updates: Record<string, unknown> = {
+        host: hostname,
+        status: host.status === 'down' ? 'down' : 'up',
+      };
+
+      // Parse services from ports array
+      const services: string[] = [];
+      const vectors: string[] = [];
+
+      if (host.ports) {
+        for (const port of host.ports) {
+          if (port.state === 'closed') continue;
+          const svcName = port.service ?? port.protocol ?? 'unknown';
+          services.push(`${svcName}:${port.port}`);
+
+          // Seed vectors based on discovered services
+          this.seedVectorsFromPort(port.port, svcName, vectors);
+        }
+      }
+
+      if (host.services) {
+        for (const svc of host.services) {
+          if (!services.includes(svc)) services.push(svc);
+        }
+      }
+
+      // Check config for web_url to add dvwa/web vectors
+      const configHost = config.target.hosts.find(h => h.ip === ip);
+      if (configHost?.web_url) {
+        vectors.push('web-app');
+        if (configHost.web_app === 'dvwa') {
+          (updates as Record<string, unknown>).dvwa_available = true;
+          vectors.push('dvwa');
+        }
+      }
+
+      graphService.updateNode(ip, {
+        ...updates,
+        services,
+        vectors_open: vectors,
+      } as Parameters<AttackGraphService['updateNode']>[1]);
+    }
+
+    // Create edges: all hosts connect to DC (if DC discovered)
+    const dcIp = recon.dc_ip ?? config.target.dc;
+    for (const host of hosts) {
+      if (host.ip !== dcIp) {
+        graphService.addEdge(host.ip, dcIp, 'domain-member');
+      }
+    }
+
+    // Add timeline entry
+    graphService.addTimeline('graph-builder', 'graph_built', `${hosts.length} hosts, ontology: ${ontology.entity_types.length} types`);
+
+    console.log(`[graph-builder] Graph built: ${hosts.length} hosts, ${ontology.entity_types.length} entity types`);
+  }
+
+  private seedFromConfig(graphService: AttackGraphService, config: WraithV3Config): void {
+    for (const host of config.target.hosts) {
+      graphService.initNode(host.ip, host.name);
+      const vectors: string[] = [];
+      if (host.web_url) vectors.push('web-app');
+      if (host.web_app === 'dvwa') vectors.push('dvwa');
+      graphService.updateNode(host.ip, {
+        status: 'unknown' as const,
+        vectors_open: vectors,
+      });
+    }
+    graphService.initNode(config.target.dc, 'DC');
+  }
+
+  private seedVectorsFromPort(port: number, service: string, vectors: string[]): void {
+    const add = (v: string) => { if (!vectors.includes(v)) vectors.push(v); };
+
+    switch (port) {
+      case 80:
+      case 443:
+      case 8080:
+      case 8443:
+      case 3000:
+        add('web-app');
+        add('sqli');
+        add('cmdi');
+        add('auth-bypass');
+        break;
+      case 445:
+        add('smb-relay');
+        add('smb-brute');
+        add('psexec');
+        break;
+      case 5985:
+      case 5986:
+        add('winrm');
+        break;
+      case 3389:
+        add('rdp-brute');
+        break;
+      case 88:
+        add('kerberoast');
+        add('asreproast');
+        break;
+      case 389:
+      case 636:
+        add('ldap-enum');
+        break;
+      case 135:
+        add('dcom');
+        break;
+      case 22:
+        add('ssh-brute');
+        break;
+    }
+
+    // Service name heuristics
+    if (service.includes('http') || service.includes('nginx') || service.includes('apache')) {
+      add('web-app');
+    }
+    if (service.includes('smb') || service.includes('microsoft-ds')) {
+      add('smb-relay');
+    }
+  }
+}

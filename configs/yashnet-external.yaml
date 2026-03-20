@@ -29,3 +29,14 @@ attack:
 output:
   log_dir: "./attack-logs-external"
   report: true
+
+planning:
+  max_rounds: 10
+  max_total_agents: 30
+  max_concurrent_agents: 3
+  objective: "full_assessment"
+  stealth_mode: true
+
+report:
+  react_max_iterations: 5
+  react_min_tool_calls: 3

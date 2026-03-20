@@ -217,6 +217,86 @@ export class AttackGraphService {
     return lines.join('\n');
   }
 
+  // v3: Query nodes by entity_type
+  queryByEntityType(type: string): AttackGraphNode[] {
+    return Object.values(this.graph.nodes).filter(
+      (n) => (n as AttackGraphNode & { entity_type?: string }).entity_type === type,
+    );
+  }
+
+  // v3: Deep clone for planner -- prevents mutation during planning
+  getGraphSnapshot(): AttackGraph {
+    return JSON.parse(JSON.stringify(this.graph));
+  }
+
+  // v3: Richer summary for planner prompts
+  getDetailedSummary(): string {
+    const nodes = Object.values(this.graph.nodes);
+    const lines: string[] = [
+      `# Attack Graph State`,
+      ``,
+      `## Overview`,
+      `- Engagement: ${this.graph.engagement_type}`,
+      `- Total hosts: ${nodes.length}`,
+      `- Active hosts: ${nodes.filter(n => n.status === 'up').length}`,
+      `- Blocked hosts: ${nodes.filter(n => n.status === 'blocked').length}`,
+      `- Pivot points: ${this.graph.pivot_points.length}`,
+      `- SOAR-blocked IPs: ${this.graph.soar_blocked_ips.join(', ') || 'none'}`,
+      ``,
+      `## Hosts`,
+    ];
+
+    for (const node of nodes) {
+      lines.push(`### ${node.host} (${node.ip})`);
+      lines.push(`- Status: ${node.status}`);
+      lines.push(`- Access: ${node.access_level}`);
+      if (node.services.length > 0) lines.push(`- Services: ${node.services.join(', ')}`);
+      if (node.vectors_open.length > 0) lines.push(`- Open vectors: ${node.vectors_open.join(', ')}`);
+      if (node.vectors_blocked.length > 0) lines.push(`- Blocked vectors: ${node.vectors_blocked.join(', ')}`);
+      if (node.notes.length > 0) lines.push(`- Notes: ${node.notes.join('; ')}`);
+      lines.push('');
+    }
+
+    if (this.graph.edges.length > 0) {
+      lines.push(`## Edges`);
+      for (const edge of this.graph.edges) {
+        lines.push(`- ${edge.from} -> ${edge.to} via ${edge.via}`);
+      }
+      lines.push('');
+    }
+
+    if (this.graph.timeline.length > 0) {
+      lines.push(`## Recent Timeline (last 10)`);
+      for (const entry of this.graph.timeline.slice(-10)) {
+        lines.push(`- [${entry.timestamp}] ${entry.agent}: ${entry.action} -> ${entry.result}`);
+      }
+    }
+
+    return lines.join('\n');
+  }
+
+  // v3: Get viable attack vectors ordered by priority
+  getViableVectors(): Array<{ host: string; ip: string; vectors: string[]; priority: number }> {
+    return Object.values(this.graph.nodes)
+      .filter(n => n.vectors_open.length > 0 && n.status !== 'blocked')
+      .map(n => ({
+        host: n.host,
+        ip: n.ip,
+        vectors: n.vectors_open,
+        priority: this.computePriority(n),
+      }))
+      .sort((a, b) => b.priority - a.priority);
+  }
+
+  private computePriority(node: AttackGraphNode): number {
+    let score = node.vectors_open.length;
+    if (node.access_level === 'none') score += 2;
+    if (node.access_level === 'user') score += 1;
+    if (node.services.some(s => s.includes('445') || s.includes('5985'))) score += 2;
+    if (node.dvwa_available) score += 1;
+    return score;
+  }
+
   toJSON(): string {
     return JSON.stringify(this.graph, null, 2);
   }

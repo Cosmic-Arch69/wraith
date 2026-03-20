@@ -32,11 +32,24 @@ After each failed connection attempt: call `graph_update` with `response_time_ms
 If `graph_query({ip: target, query_type: 'detect_block'})` returns true: stop attacking that host, document, move on.
 Add random jitter (10-60s) between lateral attempts.
 
+## Step 0: Check for Web RCE from Prior Phases (v2.1.2)
+
+Call `memory_read("session")` and look for "**WEB RCE ACHIEVED**".
+If found: You already have shell access on a web host. Use that to:
+1. Enumerate the internal network from the compromised host
+2. Look for domain credentials in environment variables, config files, history
+3. Pivot from web to domain using discovered credentials
+
 ## Step 1: Load Cracked Credentials
 
 ```bash
 cat {{logDir}}/cracked_creds.json 2>&1
 ```
+
+**v2.1.2 Fallback:** If cracked_creds.json is empty or missing, try:
+1. Call `cred_query({scope: 'domain'})` for any stored credentials
+2. Call `memory_read("auth-attack")` for credential findings
+3. If all sources empty, use initial config credentials and standard service account passwords
 
 If no cracked creds, try common service account passwords:
 - `Password1`, `Welcome1`, `Summer2024!`, `Company123!`

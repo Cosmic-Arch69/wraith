@@ -32,3 +32,15 @@ attack:
 output:
   log_dir: "./attack-logs"
   report: true
+
+# v3: Adaptive pipeline settings (optional, has defaults)
+planning:
+  max_rounds: 10
+  max_total_agents: 30
+  max_concurrent_agents: 3
+  objective: "full_assessment"
+  stealth_mode: false
+
+report:
+  react_max_iterations: 5
+  react_min_tool_calls: 3

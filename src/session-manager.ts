@@ -1,7 +1,8 @@
 // Agent registry and DAG for Wraith
 // 9 agents across 6 attack phases: recon -> web+creds parallel -> lateral -> privesc -> report
+// v3: Added AGENT_TEMPLATE_LIBRARY for adaptive pipeline planner
 
-import type { AgentDefinition, AgentName, EngagementType } from './types/index.js';
+import type { AgentDefinition, AgentName, EngagementType, ModelTier } from './types/index.js';
 
 export const AGENTS: Readonly<Partial<Record<AgentName, AgentDefinition>>> & Record<string, AgentDefinition> = Object.freeze({
 
@@ -125,3 +126,29 @@ export function getExecutionPhases(engagementType: EngagementType): AgentName[][
   }
   return EXECUTION_PHASES;
 }
+
+// ============================================================================
+// v3: Agent Template Library -- maps template names to prompt files + defaults
+// Used by the adaptive pipeline planner to select and configure agents
+// ============================================================================
+
+export interface AgentTemplate {
+  promptFile: string;
+  defaultTier: ModelTier;
+  defaultTimeout: number;
+  defaultTurnBudget: number;
+  requiresPlaywright: boolean;
+}
+
+export const AGENT_TEMPLATE_LIBRARY: Record<string, AgentTemplate> = {
+  'recon':       { promptFile: 'recon',       defaultTier: 'medium', defaultTimeout: 900,  defaultTurnBudget: 100, requiresPlaywright: false },
+  'osint-recon': { promptFile: 'osint-recon', defaultTier: 'medium', defaultTimeout: 600,  defaultTurnBudget: 60,  requiresPlaywright: false },
+  'sqli':        { promptFile: 'sqli',        defaultTier: 'medium', defaultTimeout: 600,  defaultTurnBudget: 80,  requiresPlaywright: true },
+  'cmdi':        { promptFile: 'cmdi',        defaultTier: 'medium', defaultTimeout: 600,  defaultTurnBudget: 80,  requiresPlaywright: true },
+  'auth-attack': { promptFile: 'auth-attack', defaultTier: 'medium', defaultTimeout: 600,  defaultTurnBudget: 80,  requiresPlaywright: true },
+  'kerberoast':  { promptFile: 'kerberoast',  defaultTier: 'medium', defaultTimeout: 600,  defaultTurnBudget: 120, requiresPlaywright: false },
+  'bruteforce':  { promptFile: 'bruteforce',  defaultTier: 'medium', defaultTimeout: 900,  defaultTurnBudget: 100, requiresPlaywright: false },
+  'lateral':     { promptFile: 'lateral',     defaultTier: 'medium', defaultTimeout: 1200, defaultTurnBudget: 150, requiresPlaywright: false },
+  'privesc':     { promptFile: 'privesc',     defaultTier: 'large',  defaultTimeout: 1200, defaultTurnBudget: 200, requiresPlaywright: false },
+  'report':      { promptFile: 'report',      defaultTier: 'small',  defaultTimeout: 600,  defaultTurnBudget: 100, requiresPlaywright: false },
+};

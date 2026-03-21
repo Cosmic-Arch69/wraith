@@ -2,8 +2,8 @@
 // Stores attack facts and queries semantic memory for the planner
 // v3.1.0: Wraith agents store findings, planner queries for cross-run intelligence
 
-// v3.3.0 BUG-16: Try Tailscale IP first (reachable from any network), LAN as fallback
-const DEFAULT_URL = 'http://100.91.167.11:8080/mcp';
+// Kali (10.0.0.223) reaches Lenovo (10.0.0.21) directly on management subnet
+const DEFAULT_URL = 'http://10.0.0.21:8080/mcp';
 
 interface FactTriple {
   subject: string;

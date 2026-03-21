@@ -207,7 +207,7 @@ async function spawnAgent(
     },
     'openmemory': {
       type: 'http',
-      url: process.env.OPENMEMORY_URL ?? 'http://100.91.167.11:8080/mcp',
+      url: process.env.OPENMEMORY_URL ?? 'http://10.0.0.21:8080/mcp',
     },
   };
 

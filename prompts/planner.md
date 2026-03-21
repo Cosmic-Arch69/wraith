@@ -30,9 +30,35 @@ You are operating in round {{round}} of the engagement.
 
 {{round_history}}
 
+## Credential Routing Rules (MANDATORY)
+
+When credentials exist in the Credential State above, follow these rules:
+
+1. **Web credentials discovered** (scope=web):
+   - Spawn `lateral` to test credential reuse on SMB/WinRM/RDP
+   - NEVER repeat same template+target that already succeeded
+
+2. **Domain credentials discovered** (scope=domain):
+   - Port 88 open -> spawn `kerberoast` to request TGS tickets
+   - Port 445/5985 open -> spawn `lateral` to test credential scope
+   - Domain admin creds -> spawn `privesc` for DCSync/secretsdump
+
+3. **Hash credentials** (hash field present):
+   - Spawn `lateral` with pass-the-hash technique
+
+4. **Admin/System access achieved on any host:**
+   - Spawn `privesc` targeting that host for further escalation
+   - Spawn `lateral` to test credential reuse against other hosts
+
+5. **No new credentials since last round:**
+   - Do NOT re-spawn same credential attack that produced nothing
+   - Try `bruteforce` with different wordlists or `auth-attack` against untested endpoints
+
+These rules take PRIORITY over generic vector-based planning. A credential discovery should always trigger at least one follow-up agent in the next round.
+
 ## Your Task
 
-Analyze the attack graph and produce an ActionPlan JSON object. Consider:
+Analyze the attack graph and produce an ActionPlan JSON object. Reason about what the current credential and access state reveals about viable next actions. Consider:
 
 1. **Viability:** Only spawn agents for vectors that are open and reachable. Do not retry blocked vectors unless you have new information (credentials, pivot point).
 2. **Priority:** Attack vectors with higher impact first (domain admin path > web shells > info gathering).

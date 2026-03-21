@@ -108,9 +108,13 @@ export class GraphBuilder {
       }
 
       // Also use open_ports array if available (BUG-8: recon may provide this)
+      // v3.3.0 BUG-22: Map port numbers to service names
       if (host.open_ports) {
         for (const port of host.open_ports) {
-          this.seedVectorsFromPort(port, '', vectors);
+          const serviceName = this.portToServiceName(port);
+          const svc = `${serviceName}:${port}`;
+          if (!services.includes(svc)) services.push(svc);
+          this.seedVectorsFromPort(port, serviceName, vectors);
         }
       }
 
@@ -228,5 +232,17 @@ export class GraphBuilder {
     if (service.includes('smb') || service.includes('microsoft-ds')) {
       add('smb-relay');
     }
+  }
+
+  // v3.3.0 BUG-22: Map common port numbers to human-readable service names
+  private portToServiceName(port: number): string {
+    const map: Record<number, string> = {
+      22: 'ssh', 53: 'dns', 80: 'http', 88: 'kerberos',
+      135: 'rpc', 139: 'netbios', 389: 'ldap', 443: 'https',
+      445: 'smb', 636: 'ldaps', 3000: 'http-alt', 3306: 'mysql',
+      3389: 'rdp', 5432: 'postgresql', 5985: 'winrm', 5986: 'winrm-ssl',
+      8080: 'http-proxy', 8443: 'https-alt', 9443: 'https-alt',
+    };
+    return map[port] ?? 'unknown';
   }
 }

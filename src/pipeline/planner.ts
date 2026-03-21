@@ -193,7 +193,9 @@ export class AttackPlanner {
       budget.max_concurrent,
       budget.max_total_agents - budget.agents_spawned,
     );
+    const spawnedCombos = new Set<string>();
 
+    // Part 1: Vector-based agents (existing logic)
     for (const target of viableVectors) {
       if (agents.length >= maxAgents) break;
 
@@ -202,6 +204,10 @@ export class AttackPlanner {
 
         const template = this.vectorToTemplate(vector);
         if (!template) continue;
+
+        const combo = `${template}-${target.ip}`;
+        if (spawnedCombos.has(combo)) continue;
+        spawnedCombos.add(combo);
 
         const lib = AGENT_TEMPLATE_LIBRARY[template];
         if (!lib) continue;
@@ -225,6 +231,16 @@ export class AttackPlanner {
       }
     }
 
+    // Part 2: Credential-driven agents (v3.3.0 BUG-25/28/29)
+    if (agents.length < maxAgents) {
+      const credAgents = this.credentialDrivenAgents(graphService, round, config, spawnedCombos);
+      for (const agent of credAgents) {
+        if (agents.length >= maxAgents) break;
+        agents.push(agent);
+      }
+    }
+
+    const credDriven = agents.filter(a => ['kerberoast', 'lateral', 'privesc'].includes(a.prompt_template)).length;
     const objectiveStatus = agents.length === 0
       ? (viableVectors.length === 0 ? 'achieved' : 'blocked')
       : budget.rounds_used >= budget.max_rounds
@@ -236,11 +252,133 @@ export class AttackPlanner {
       agents_to_spawn: agents,
       agents_to_skip: [],
       objective_status: objectiveStatus,
-      reasoning: `Deterministic fallback: ${agents.length} agents for ${viableVectors.length} targets with open vectors.`,
+      reasoning: `Deterministic fallback: ${agents.length} agents (${credDriven} credential-driven) for ${viableVectors.length} targets.`,
       next_milestone: agents.length > 0
         ? `Execute ${agents[0].technique_name} against ${agents[0].target_ip}`
         : 'No viable vectors remaining',
     };
+  }
+
+  // v3.3.0: Spawn kerberoast/lateral/privesc when credentials exist (BUG-25/28/29)
+  private credentialDrivenAgents(
+    graphService: AttackGraphService,
+    round: number,
+    config: WraithV3Config,
+    spawnedCombos: Set<string>,
+  ): AgentProfile[] {
+    const agents: AgentProfile[] = [];
+    const logDir = config.output.log_dir;
+    const snapshot = graphService.getGraphSnapshot();
+    const nodes = Object.values(snapshot.nodes);
+
+    // Load credential state
+    let creds: Array<Record<string, unknown>> = [];
+    const credsPath = join(logDir, 'credentials.json');
+    if (existsSync(credsPath)) {
+      try {
+        creds = JSON.parse(readFileSync(credsPath, 'utf-8'));
+      } catch { /* skip */ }
+    }
+    if (!Array.isArray(creds) || creds.length === 0) return agents;
+
+    const hasDomainCreds = creds.some(c => c.scope === 'domain');
+    const hasAdminAccess = nodes.some(n => n.access_level === 'admin' || n.access_level === 'system');
+    const stealth = config.planning?.stealth_mode ? 'quiet' as const : 'moderate' as const;
+
+    // Rule 1: Domain creds + port 88 open -> kerberoast
+    if (hasDomainCreds) {
+      const kerberosHost = nodes.find(n =>
+        n.services.some(s => s.includes('88') || s.includes('kerberos')) &&
+        n.status !== 'blocked',
+      );
+      if (kerberosHost) {
+        const combo = `kerberoast-${kerberosHost.ip}`;
+        if (!spawnedCombos.has(combo)) {
+          spawnedCombos.add(combo);
+          const lib = AGENT_TEMPLATE_LIBRARY['kerberoast'];
+          agents.push({
+            id: `kerberoast-r${round}-${kerberosHost.ip}`,
+            technique: 'T1558.003',
+            technique_name: 'Kerberoasting',
+            target_ip: kerberosHost.ip,
+            prompt_template: 'kerberoast',
+            model_tier: lib.defaultTier,
+            turn_budget: lib.defaultTurnBudget,
+            timeout_sec: lib.defaultTimeout,
+            priority: 8,
+            stealth_level: stealth,
+            depends_on: [],
+            context_vars: {
+              round_context: `Credential-driven: domain creds available, Kerberos service on ${kerberosHost.ip}.`,
+            },
+          });
+        }
+      }
+    }
+
+    // Rule 2: Any creds + multiple hosts with SMB/WinRM -> lateral
+    if (creds.length > 0 && nodes.filter(n => n.status !== 'blocked').length > 1) {
+      const lateralTarget = nodes.find(n =>
+        n.status !== 'blocked' &&
+        n.services.some(s => s.includes('445') || s.includes('5985') || s.includes('smb') || s.includes('winrm')),
+      );
+      if (lateralTarget) {
+        const combo = `lateral-${lateralTarget.ip}`;
+        if (!spawnedCombos.has(combo)) {
+          spawnedCombos.add(combo);
+          const lib = AGENT_TEMPLATE_LIBRARY['lateral'];
+          agents.push({
+            id: `lateral-r${round}-${lateralTarget.ip}`,
+            technique: 'T1021.002',
+            technique_name: 'Remote Service Access',
+            target_ip: lateralTarget.ip,
+            prompt_template: 'lateral',
+            model_tier: lib.defaultTier,
+            turn_budget: lib.defaultTurnBudget,
+            timeout_sec: lib.defaultTimeout,
+            priority: 7,
+            stealth_level: stealth,
+            depends_on: [],
+            context_vars: {
+              round_context: `Credential-driven: ${creds.length} credentials available, testing reuse against ${lateralTarget.ip}.`,
+            },
+          });
+        }
+      }
+    }
+
+    // Rule 3: Admin access on any host -> privesc
+    if (hasAdminAccess) {
+      const adminHost = nodes.find(n =>
+        (n.access_level === 'admin' || n.access_level === 'system') &&
+        n.status !== 'blocked',
+      );
+      if (adminHost) {
+        const combo = `privesc-${adminHost.ip}`;
+        if (!spawnedCombos.has(combo)) {
+          spawnedCombos.add(combo);
+          const lib = AGENT_TEMPLATE_LIBRARY['privesc'];
+          agents.push({
+            id: `privesc-r${round}-${adminHost.ip}`,
+            technique: 'T1068',
+            technique_name: 'Privilege Escalation',
+            target_ip: adminHost.ip,
+            prompt_template: 'privesc',
+            model_tier: lib.defaultTier,
+            turn_budget: lib.defaultTurnBudget,
+            timeout_sec: lib.defaultTimeout,
+            priority: 9,
+            stealth_level: stealth,
+            depends_on: [],
+            context_vars: {
+              round_context: `Credential-driven: admin access on ${adminHost.ip}, escalating.`,
+            },
+          });
+        }
+      }
+    }
+
+    return agents;
   }
 
   private vectorToTemplate(vector: string): string | null {

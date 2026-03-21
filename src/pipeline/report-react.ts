@@ -1,6 +1,6 @@
-// ReACT Report Generator -- tool-grounded pentesting report
-// Adapted from MiroFish report_agent.py pattern
-// v3: In-process tools (not MCP), iterative section generation
+// ReACT Report Generator -- evidence-first pentesting report
+// v3.3.0: Evidence pre-collected and injected into prompt (no runtime tool calls)
+// Adapted from MiroFish report_agent.py pattern + PentestAgent CSV-first pattern
 
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -13,65 +13,148 @@ import type {
   WraithV3Config,
 } from '../types/index.js';
 
-// In-process report tools (no MCP server needed)
-interface ToolCall {
-  tool: string;
-  args: Record<string, string>;
+// v3.3.0: Pre-collected evidence structure (replaces runtime tool calls)
+export interface PreCollectedEvidence {
+  graphSummary: string;
+  nodeDetails: Record<string, string>;
+  allEvidence: string;
+  detectionCoverage: string;
+  attackToolList: string[];
+  roundSummaries: string[];
 }
 
 export class ReportGenerator {
   private graph!: AttackGraph;
   private rounds!: RoundResult[];
-  private logDir!: string;
+  private preCollected!: PreCollectedEvidence;
+
+  // v3.3.0: Pre-collect all evidence before report generation (BUG-30/31 fix)
+  static preCollectEvidence(
+    graph: AttackGraph,
+    rounds: RoundResult[],
+    logDir: string,
+  ): PreCollectedEvidence {
+    const nodes = Object.values(graph.nodes);
+
+    // Graph summary
+    const graphLines = [
+      `Hosts: ${nodes.length}`,
+      `Active: ${nodes.filter(n => n.status === 'up').length}`,
+      `Blocked: ${nodes.filter(n => n.status === 'blocked').length}`,
+      `Pivots: ${graph.pivot_points.length}`,
+      `SOAR blocks: ${graph.soar_blocked_ips.join(', ') || 'none'}`,
+    ];
+    for (const node of nodes) {
+      graphLines.push(`\n${node.host} (${node.ip}): status=${node.status}, access=${node.access_level}, services=${node.services.join(',')}, open_vectors=${node.vectors_open.join(',')}, blocked_vectors=${node.vectors_blocked.join(',')}`);
+    }
+
+    // Node details
+    const nodeDetails: Record<string, string> = {};
+    for (const node of nodes) {
+      nodeDetails[node.ip] = JSON.stringify(node, null, 2);
+    }
+
+    // All evidence files
+    const evidenceParts: string[] = [];
+    if (existsSync(logDir)) {
+      for (const f of readdirSync(logDir)) {
+        if (f.endsWith('_evidence.md') ||
+            (f.startsWith('agent-') && f.endsWith('-output.md')) ||
+            f === 'nuclei_evidence.md') {
+          try {
+            const content = readFileSync(join(logDir, f), 'utf-8');
+            evidenceParts.push(`### ${f}\n${content.substring(0, 3000)}`);
+          } catch { /* skip */ }
+        }
+      }
+    }
+
+    // Credentials
+    const credsPath = join(logDir, 'credentials.json');
+    if (existsSync(credsPath)) {
+      try {
+        const creds = readFileSync(credsPath, 'utf-8');
+        evidenceParts.push(`### credentials.json\n${creds.substring(0, 2000)}`);
+      } catch { /* skip */ }
+    }
+
+    // Detection coverage from attacks.jsonl
+    const attacksPath = join(logDir, 'attacks.jsonl');
+    const toolSet = new Set<string>();
+    let detectionSummary = 'No attacks.jsonl found.';
+    if (existsSync(attacksPath)) {
+      const lines = readFileSync(attacksPath, 'utf-8').trim().split('\n').filter(Boolean);
+      const attacks = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+      for (const a of attacks) {
+        if (a.tool) toolSet.add(a.tool);
+      }
+      const byTechnique: Record<string, { total: number; success: number; blocked: number; failed: number }> = {};
+      for (const a of attacks) {
+        const t = a.technique ?? 'unknown';
+        if (!byTechnique[t]) byTechnique[t] = { total: 0, success: 0, blocked: 0, failed: 0 };
+        byTechnique[t].total++;
+        if (a.result === 'success') byTechnique[t].success++;
+        if (a.result === 'blocked') byTechnique[t].blocked++;
+        if (a.result === 'failed') byTechnique[t].failed++;
+      }
+      detectionSummary = `Total attacks: ${attacks.length}\n` +
+        Object.entries(byTechnique)
+          .map(([t, s]) => `${t}: ${s.total} attempts, ${s.success} success, ${s.blocked} blocked, ${s.failed} failed`)
+          .join('\n');
+    }
+
+    // Round summaries
+    const roundSummaries = rounds.map(r => {
+      const agents = r.agent_results.map(
+        a => `  - ${a.agent_id}: ${a.success ? 'SUCCESS' : 'FAILED'} (${a.turns_used} turns, ${a.duration_ms}ms) -- ${a.result_summary.substring(0, 150)}`,
+      ).join('\n');
+      return `### Round ${r.round}\n${agents}`;
+    });
+
+    return {
+      graphSummary: graphLines.join('\n'),
+      nodeDetails,
+      allEvidence: evidenceParts.join('\n\n'),
+      detectionCoverage: detectionSummary,
+      attackToolList: Array.from(toolSet),
+      roundSummaries,
+    };
+  }
 
   async generateReport(
     graph: AttackGraph,
     rounds: RoundResult[],
     logDir: string,
     config: WraithV3Config,
+    evidence?: PreCollectedEvidence,
   ): Promise<string> {
     this.graph = graph;
     this.rounds = rounds;
-    this.logDir = logDir;
-
-    const reportConfig = config.report ?? {
-      react_max_iterations: 5,
-      react_min_tool_calls: 3,
-    };
+    this.preCollected = evidence ?? ReportGenerator.preCollectEvidence(graph, rounds, logDir);
 
     // 1. Generate outline
-    const outline = await this.planOutline(graph, config);
+    const outline = this.planOutline(config);
     console.log(`[report] Outline: ${outline.sections.length} sections`);
 
-    // 2. Generate each section
+    // 2. Generate each section with pre-injected evidence
     const sections: string[] = [];
     sections.push(`# ${outline.title}\n\n${outline.executive_summary}\n`);
 
     for (const section of outline.sections) {
       console.log(`[report] Writing section: ${section.title}`);
-      const content = await this.generateSection(
-        section,
-        outline,
-        sections,
-        config,
-        reportConfig,
-      );
+      const content = await this.generateSection(section, outline, sections, config);
       sections.push(content);
     }
 
     return sections.join('\n\n---\n\n');
   }
 
-  private async planOutline(
-    graph: AttackGraph,
-    config: WraithV3Config,
-  ): Promise<ReportOutline> {
-    const nodes = Object.values(graph.nodes);
+  private planOutline(config: WraithV3Config): ReportOutline {
+    const nodes = Object.values(this.graph.nodes);
     const totalSuccesses = this.rounds.reduce(
       (s, r) => s + r.agent_results.filter(a => a.success).length, 0,
     );
 
-    // Default outline -- deterministic, no LLM call needed
     return {
       title: `Penetration Test Report -- ${config.target.domain}`,
       executive_summary: `This report documents the findings from an automated penetration test conducted against ${config.target.domain}. The assessment covered ${nodes.length} hosts across ${this.rounds.length} attack rounds, with ${totalSuccesses} successful attack vectors identified.`,
@@ -85,13 +168,16 @@ export class ReportGenerator {
     };
   }
 
+  // v3.3.0: Single-pass evidence-injected section generation (replaces ReACT loop)
   private async generateSection(
     section: { title: string; description: string },
     outline: ReportOutline,
     previousSections: string[],
     config: WraithV3Config,
-    reportConfig: { react_max_iterations: number; react_min_tool_calls: number },
   ): Promise<string> {
+    // Build evidence context based on section type
+    const evidenceContext = this.buildSectionEvidence(section.title);
+
     // Build prompt
     const prompt = await loadPrompt('report-react', {
       domain: config.target.domain,
@@ -105,259 +191,69 @@ export class ReportGenerator {
       previous_sections: previousSections.length > 0
         ? previousSections.join('\n\n').substring(0, 5000)
         : '(None yet -- this is the first section)',
-      min_tool_calls: String(reportConfig.react_min_tool_calls),
-      max_tool_calls: String(reportConfig.react_max_iterations),
     });
 
-    // v3.1.0 D3: Auto-prepend valid IPs for Findings section (anti-hallucination)
-    let conversation = prompt;
-    if (section.title.toLowerCase().includes('finding')) {
-      const validHosts = this.toolGraphQuery({ query: 'summary' });
-      conversation = `IMPORTANT: Only reference IPs and hosts from this list:\n${validHosts}\n\nDo NOT invent IPs that are not listed above.\n\n${conversation}`;
-    }
-    let toolCallCount = 0;
-    const maxIterations = reportConfig.react_max_iterations;
+    // Inject evidence directly into the prompt
+    const fullPrompt = [
+      `## Pre-Collected Evidence\n\n${evidenceContext}`,
+      '---',
+      prompt,
+      '',
+      'IMPORTANT: All evidence has been pre-collected above. Do NOT attempt tool calls. Write your section directly from the evidence provided. If evidence is insufficient for a claim, state that explicitly.',
+    ].join('\n\n');
 
-    for (let i = 0; i < maxIterations; i++) {
-      const result = await runAgent(conversation, `report-${section.title}`, 'small', {}, 15);
+    const result = await runAgent(fullPrompt, `report-${section.title}`, 'small', {}, 15);
 
-      if (!result.success || !result.result) {
-        console.warn(`[report] Section "${section.title}" generation failed -- using placeholder`);
-        return `## ${section.title}\n\n*Section could not be generated due to an error.*`;
-      }
-
-      const text = result.result;
-
-      // Check for Final Answer
-      const finalAnswerMatch = text.match(/\*\*Final Answer:\*\*([\s\S]*)/i)
-        ?? text.match(/Final Answer:([\s\S]*)/i);
-
-      // Parse tool calls
-      const toolCalls = this.parseToolCalls(text);
-
-      if (toolCalls.length > 0 && !finalAnswerMatch) {
-        // Process tool calls and inject observations
-        const observations: string[] = [];
-        for (const tc of toolCalls) {
-          const obs = this.executeTool(tc);
-          observations.push(`**Observation (${tc.tool}):** ${obs}`);
-          toolCallCount++;
-        }
-
-        conversation = `${text}\n\n${observations.join('\n\n')}\n\nContinue your analysis. You have made ${toolCallCount} tool calls so far.`;
-        continue;
-      }
-
-      if (finalAnswerMatch) {
-        // v3.1.0 D4: Strip duplicate numbered headers (BUG-12)
-        const cleaned = finalAnswerMatch[1].trim().replace(/^#{1,3}\s*\d+\.?\s*/gm, '');
-        return `## ${section.title}\n\n${cleaned}`;
-      }
-
-      // No tool calls and no final answer -- treat whole output as final
-      const cleaned = text.replace(/^#{1,3}\s*\d+\.?\s*/gm, '');
-      return `## ${section.title}\n\n${cleaned}`;
+    if (!result.success || !result.result) {
+      console.warn(`[report] Section "${section.title}" generation failed -- using placeholder`);
+      return `## ${section.title}\n\n*Section could not be generated due to an error.*`;
     }
 
-    // Max iterations reached
-    return `## ${section.title}\n\n*Section truncated after ${maxIterations} ReACT iterations.*`;
+    // Extract content (handle "Final Answer:" prefix if present)
+    let text = result.result;
+    const finalMatch = text.match(/\*\*Final Answer:\*\*([\s\S]*)/i)
+      ?? text.match(/Final Answer:([\s\S]*)/i);
+    if (finalMatch) text = finalMatch[1].trim();
+
+    // Clean duplicate numbered headers
+    const cleaned = text.replace(/^#{1,3}\s*\d+\.?\s*/gm, '');
+    return `## ${section.title}\n\n${cleaned}`;
   }
 
-  private parseToolCalls(text: string): ToolCall[] {
-    const calls: ToolCall[] = [];
+  // v3.3.0: Assemble section-specific evidence from pre-collected data
+  private buildSectionEvidence(sectionTitle: string): string {
+    const parts: string[] = [];
+    const lower = sectionTitle.toLowerCase();
 
-    // XML format: <tool_call>{"tool": "...", "args": {...}}</tool_call>
-    const xmlMatches = text.matchAll(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g);
-    for (const match of xmlMatches) {
-      try {
-        const parsed = JSON.parse(match[1]);
-        if (parsed.tool && parsed.args) {
-          calls.push(parsed as ToolCall);
-        }
-      } catch { /* skip malformed */ }
+    // All sections get graph summary
+    parts.push(`### Attack Graph Summary\n${this.preCollected.graphSummary}`);
+
+    if (lower.includes('methodology')) {
+      // BUG-31 fix: actual tool list prevents hallucination
+      parts.push(`### Tools Actually Used (from attacks.jsonl)\n${this.preCollected.attackToolList.join(', ') || 'No tools recorded in attack log'}`);
+      parts.push(`### Round Summaries\n${this.preCollected.roundSummaries.join('\n\n')}`);
+      parts.push(`### Detection Coverage\n${this.preCollected.detectionCoverage}`);
     }
 
-    // Bare JSON fallback: {"tool": "...", "args": {...}}
-    if (calls.length === 0) {
-      const jsonMatches = text.matchAll(/\{"tool"\s*:\s*"([^"]+)"\s*,\s*"args"\s*:\s*(\{[^}]+\})\}/g);
-      for (const match of jsonMatches) {
-        try {
-          calls.push({
-            tool: match[1],
-            args: JSON.parse(match[2]),
-          });
-        } catch { /* skip */ }
-      }
+    if (lower.includes('finding')) {
+      parts.push(`### Evidence Files\n${this.preCollected.allEvidence.substring(0, 10000)}`);
+      parts.push(`### Detection Coverage\n${this.preCollected.detectionCoverage}`);
     }
 
-    return calls;
-  }
-
-  private executeTool(call: ToolCall): string {
-    switch (call.tool) {
-      case 'graph_query':
-        return this.toolGraphQuery(call.args);
-      case 'evidence_search':
-        return this.toolEvidenceSearch(call.args);
-      case 'detection_analysis':
-        return this.toolDetectionAnalysis(call.args);
-      case 'recommendation_engine':
-        return this.toolRecommendation(call.args);
-      default:
-        return `Unknown tool: ${call.tool}`;
-    }
-  }
-
-  // Tool 1: Query attack graph
-  private toolGraphQuery(args: Record<string, string>): string {
-    const query = args.query ?? 'summary';
-
-    switch (query) {
-      case 'summary': {
-        const nodes = Object.values(this.graph.nodes);
-        const lines = [
-          `Hosts: ${nodes.length}`,
-          `Active: ${nodes.filter(n => n.status === 'up').length}`,
-          `Blocked: ${nodes.filter(n => n.status === 'blocked').length}`,
-          `Pivots: ${this.graph.pivot_points.length}`,
-          `SOAR blocks: ${this.graph.soar_blocked_ips.join(', ') || 'none'}`,
-        ];
-        for (const node of nodes) {
-          lines.push(`\n${node.host} (${node.ip}): status=${node.status}, access=${node.access_level}, services=${node.services.join(',')}, open_vectors=${node.vectors_open.join(',')}, blocked_vectors=${node.vectors_blocked.join(',')}`);
-        }
-        return lines.join('\n');
-      }
-
-      case 'node': {
-        const ip = args.ip;
-        const node = ip ? this.graph.nodes[ip] : undefined;
-        if (!node) return `No node found for ${ip}`;
-        return JSON.stringify(node, null, 2);
-      }
-
-      case 'open_vectors': {
-        return Object.values(this.graph.nodes)
-          .filter(n => n.vectors_open.length > 0)
-          .map(n => `${n.host} (${n.ip}): ${n.vectors_open.join(', ')}`)
-          .join('\n') || 'No open vectors remaining';
-      }
-
-      case 'edges': {
-        return this.graph.edges
-          .map(e => `${e.from} -> ${e.to} via ${e.via}`)
-          .join('\n') || 'No edges recorded';
-      }
-
-      default:
-        return `Unknown query type: ${query}`;
-    }
-  }
-
-  // Tool 2: Search evidence files (v3.1.0 D1: validated sources, 20 lines, agent outputs)
-  private toolEvidenceSearch(args: Record<string, string>): string {
-    const keyword = args.keyword ?? '';
-    const agentId = args.agent_id;
-    const results: string[] = [];
-
-    if (!existsSync(this.logDir)) return 'No evidence directory found';
-
-    // v3.1.0 D1: Only search validated evidence sources (not raw config or temp files)
-    const validFiles: string[] = [];
-
-    // Core evidence files
-    for (const f of readdirSync(this.logDir)) {
-      if (f.endsWith('_evidence.md') || f.endsWith('_deliverable.json') ||
-          f.startsWith('agent-') && f.endsWith('-output.md') ||
-          f === 'attacks.jsonl' || f === 'credentials.json' || f === 'cracked_creds.json' ||
-          f === 'nuclei_evidence.md') {
-        validFiles.push(f);
-      }
+    if (lower.includes('narrative') || lower.includes('attack')) {
+      parts.push(`### Round Summaries\n${this.preCollected.roundSummaries.join('\n\n')}`);
+      parts.push(`### Evidence Files\n${this.preCollected.allEvidence.substring(0, 8000)}`);
     }
 
-    // Memory files
-    const memDir = join(this.logDir, 'memory');
-    if (existsSync(memDir)) {
-      for (const f of readdirSync(memDir)) {
-        if (f.endsWith('.md')) validFiles.push(`memory/${f}`);
-      }
+    if (lower.includes('detection')) {
+      parts.push(`### Detection Coverage\n${this.preCollected.detectionCoverage}`);
     }
 
-    for (const file of validFiles) {
-      if (agentId && !file.includes(agentId.split('-')[0])) continue;
-
-      try {
-        const filePath = join(this.logDir, file);
-        const content = readFileSync(filePath, 'utf-8');
-        if (keyword && !content.toLowerCase().includes(keyword.toLowerCase())) continue;
-
-        const lines = content.split('\n');
-        const matches = lines.filter(l =>
-          l.toLowerCase().includes(keyword.toLowerCase()),
-        );
-        if (matches.length > 0) {
-          results.push(`**${file}:**\n${matches.slice(0, 20).join('\n')}`); // v3.1.0: 20 lines, not 5
-        }
-      } catch { /* skip */ }
+    if (lower.includes('recommend')) {
+      parts.push(`### Detection Coverage\n${this.preCollected.detectionCoverage}`);
+      parts.push(`### Evidence Files\n${this.preCollected.allEvidence.substring(0, 5000)}`);
     }
 
-    return results.length > 0
-      ? results.join('\n\n')
-      : `No evidence found for keyword "${keyword}"${agentId ? ` in agent ${agentId}` : ''}. Note: only validated evidence files are searched.`;
-  }
-
-  // Tool 3: Detection analysis
-  private toolDetectionAnalysis(args: Record<string, string>): string {
-    const techniqueId = args.technique_id ?? 'all';
-    const attacksPath = join(this.logDir, 'attacks.jsonl');
-    if (!existsSync(attacksPath)) return 'No attacks.jsonl found';
-
-    const lines = readFileSync(attacksPath, 'utf-8').trim().split('\n').filter(Boolean);
-    const attacks = lines.map(l => {
-      try { return JSON.parse(l); } catch { return null; }
-    }).filter(Boolean);
-
-    if (techniqueId === 'all') {
-      const byTechnique: Record<string, { total: number; success: number; blocked: number }> = {};
-      for (const a of attacks) {
-        const t = a.technique ?? 'unknown';
-        if (!byTechnique[t]) byTechnique[t] = { total: 0, success: 0, blocked: 0 };
-        byTechnique[t].total++;
-        if (a.result === 'success') byTechnique[t].success++;
-        if (a.result === 'blocked') byTechnique[t].blocked++;
-      }
-      const summaryLines = Object.entries(byTechnique).map(
-        ([t, stats]) => `${t}: ${stats.total} attempts, ${stats.success} success, ${stats.blocked} blocked`,
-      );
-      return `Detection coverage:\n${summaryLines.join('\n')}`;
-    }
-
-    const filtered = attacks.filter((a: Record<string, unknown>) => a.technique === techniqueId);
-    if (filtered.length === 0) return `No attacks found for technique ${techniqueId}`;
-
-    const detected = filtered.filter((a: Record<string, unknown>) => a.result === 'blocked').length;
-    const total = filtered.length;
-    const wazuhRules = [...new Set(filtered.map((a: Record<string, unknown>) => a.wazuhRuleExpected).filter(Boolean))];
-
-    return `Technique ${techniqueId}: ${total} attempts, ${detected} blocked (${Math.round(detected / total * 100)}% detection rate). Expected Wazuh rules: ${wazuhRules.join(', ') || 'none specified'}`;
-  }
-
-  // Tool 4: Recommendation engine
-  private toolRecommendation(args: Record<string, string>): string {
-    const finding = args.finding?.toLowerCase() ?? '';
-
-    const recommendations: Record<string, string> = {
-      'sql injection': '1. Use parameterized queries/prepared statements\n2. Implement input validation (allowlist approach)\n3. Deploy WAF rules for SQLi patterns\n4. Enable database auditing\n5. Apply principle of least privilege for DB accounts',
-      'command injection': '1. Avoid shell execution with user input\n2. Use allowlisted command arguments\n3. Implement input sanitization\n4. Run applications in sandboxed containers\n5. Enable process auditing',
-      'weak password': '1. Enforce minimum 14-character passwords\n2. Implement MFA for all accounts\n3. Deploy password policy via GPO\n4. Use LAPS for local admin passwords\n5. Monitor for password spraying (Wazuh rule 60122)',
-      'kerberoast': '1. Use AES encryption for service accounts (disable RC4)\n2. Set service account passwords to 25+ characters\n3. Use gMSA where possible\n4. Monitor for TGS-REQ anomalies (Wazuh rule 4769)\n5. Restrict SPN assignments',
-      'lateral movement': '1. Implement network segmentation (VLANs)\n2. Deploy host-based firewall rules\n3. Use tiered admin model\n4. Enable Windows Credential Guard\n5. Monitor for PsExec/WinRM usage (Wazuh rules 92600-92602)',
-      'privilege escalation': '1. Remove unnecessary local admin rights\n2. Deploy LAPS\n3. Enable UAC and Credential Guard\n4. Audit scheduled tasks and services\n5. Monitor for token manipulation (Wazuh rule 4672)',
-    };
-
-    for (const [key, rec] of Object.entries(recommendations)) {
-      if (finding.includes(key)) return rec;
-    }
-
-    return `Generic remediation for "${finding}":\n1. Apply defense-in-depth principles\n2. Enable logging and monitoring\n3. Conduct regular vulnerability assessments\n4. Implement network segmentation\n5. Follow CIS benchmarks for hardening`;
+    return parts.join('\n\n');
   }
 }

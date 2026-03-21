@@ -181,11 +181,25 @@ export class Evaluator {
         }
         break;
 
-      case 'blocked':
-        graph.updateNode(ip, { status: 'blocked' });
-        graph.addSoarBlock(ip);
+      case 'blocked': {
+        // v3.3.0 BUG-23: Only mark as SOAR-blocked if details contain SOAR-specific indicators
+        const isSoar = this.isSoarIndicator(attack.details);
+        if (isSoar) {
+          graph.addSoarBlock(ip);
+        } else {
+          // Non-SOAR block (connection refused, service down) -- close vector, keep host up
+          graph.updateNode(ip, { status: 'up' });
+          if (attack.techniqueName) {
+            const vectorName = this.techniqueToVector(attack.technique);
+            if (vectorName) {
+              graph.updateNode(ip, { vectors_blocked: [vectorName] });
+              delta.vectors_closed.push(`${ip}:${vectorName}`);
+            }
+          }
+        }
         delta.nodes_updated.push(ip);
         break;
+      }
 
       case 'failed':
         // Mark the specific vector as blocked
@@ -228,17 +242,63 @@ export class Evaluator {
           delta.credentials_gained++;
         }
 
-        // Check for BLOCKED/SOAR indicators
-        if (/\bBLOCKED\b/.test(content) || /\bSOAR\b/.test(content)) {
+        // v3.3.0 BUG-23: Require SOAR-specific keywords, not just "BLOCKED"
+        if (this.isSoarEvidence(content)) {
           const ipMatch = content.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/);
           if (ipMatch) {
             graph.addSoarBlock(ipMatch[1]);
+          }
+        }
+
+        // v3.3.0 BUG-24: Detect web admin credentials in evidence
+        if (/\badmin\b/i.test(content) && (/\bcracked\b/i.test(content) || /\bpassword\b/i.test(content))) {
+          const ipMatch = content.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/);
+          if (ipMatch) {
+            const node = graph.queryNode(ipMatch[1]);
+            if (node && node.access_level === 'none') {
+              graph.updateNode(ipMatch[1], { access_level: 'user' });
+              delta.access_levels_changed.push({ ip: ipMatch[1], from: 'none', to: 'user' });
+            }
+            graph.updateNode(ipMatch[1], { notes: ['[evaluator] Web admin credential discovered'] });
           }
         }
       } catch {
         // Skip unreadable evidence files
       }
     }
+  }
+
+  // v3.3.0 BUG-23: Check if attack details indicate a real SOAR block (not timeout/connection error)
+  private isSoarIndicator(details: string): boolean {
+    if (!details) return false;
+    const lower = details.toLowerCase();
+    return (
+      lower.includes('soar') ||
+      lower.includes('pfsense') ||
+      lower.includes('pfctl') ||
+      lower.includes('firewall rule') ||
+      lower.includes('firewall block') ||
+      (lower.includes('blocked') && (lower.includes('soar') || lower.includes('firewall')))
+    );
+  }
+
+  // v3.3.0 BUG-23: Require both SOAR keyword AND block indicator in evidence text
+  private isSoarEvidence(content: string): boolean {
+    const hasSoarKeyword = /\bSOAR\b/i.test(content) || /\bpfSense\b/i.test(content) ||
+      /\bpfctl\b/i.test(content) || /\bfirewall\b/i.test(content);
+    const hasBlockIndicator = /\bBLOCKED\b/i.test(content) || /\bblocked by\b/i.test(content) ||
+      /\bblock rule\b/i.test(content);
+    return hasSoarKeyword && hasBlockIndicator;
+  }
+
+  // v3.3.0: Classify agent outcome for logging/analysis
+  classifyAgentOutcome(result: AgentRoundResult): 'success' | 'clean_failure' | 'timeout' | 'refusal' | 'soar_block' {
+    if (result.success) return 'success';
+    if (result.turns_used === 0 && result.duration_ms < 5000) return 'refusal';
+    if (result.result_summary.startsWith('TIMEOUT')) return 'timeout';
+    if (result.result_summary.toLowerCase().includes('soar') ||
+        result.result_summary.toLowerCase().includes('firewall')) return 'soar_block';
+    return 'clean_failure';
   }
 
   private techniqueToVector(technique: string): string | null {

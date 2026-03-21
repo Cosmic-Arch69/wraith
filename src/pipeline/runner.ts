@@ -1,4 +1,4 @@
-// Wraith v3.2.0 Adaptive Pipeline Runner
+// Wraith v3.3.0 Adaptive Pipeline Runner
 // Closed-loop: Config -> Recon -> Nuclei -> Ontology -> Graph -> Plan -> Attack Loop -> Report
 // v3.2.0: Context isolation + lab authorization (BUG-18 fix -- agents were refusing due to exploitation context)
 
@@ -299,7 +299,7 @@ export async function runPipeline(configPath: string): Promise<void> {
     max_concurrent_agents: 3,
   };
 
-  console.log(`\n  Wraith v3.2.0 -- Adaptive Pipeline`);
+  console.log(`\n  Wraith v3.3.0 -- Adaptive Pipeline`);
   console.log(`  Target: ${config.target.domain} (${config.target.dc})`);
   console.log(`  Hosts:  ${config.target.hosts.map(h => h.ip).join(', ')}`);
   console.log(`  Budget: ${planning.max_rounds} rounds, ${planning.max_total_agents} agents, ${planning.max_concurrent_agents} concurrent`);
@@ -599,12 +599,19 @@ export async function runPipeline(configPath: string): Promise<void> {
   // 8. REPORT (ReACT agent)
   // =====================================================
   console.log('\n[pipeline] Phase: REPORT');
+
+  // v3.3.0 BUG-30/31: Pre-collect all evidence before report generation
+  const graphSnapshot = attackGraph.getGraphSnapshot();
+  const preCollected = ReportGenerator.preCollectEvidence(graphSnapshot, history, logDir);
+  console.log(`[report] Evidence pre-collected: ${preCollected.attackToolList.length} tools, ${preCollected.roundSummaries.length} rounds`);
+
   const reportGen = new ReportGenerator();
   const report = await reportGen.generateReport(
-    attackGraph.getGraphSnapshot(),
+    graphSnapshot,
     history,
     logDir,
     config,
+    preCollected,
   );
   writeFileSync(join(logDir, 'pentest_report.md'), report);
   console.log(`[pipeline] Report written to ${logDir}/pentest_report.md`);

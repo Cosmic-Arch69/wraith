@@ -10,6 +10,7 @@ import { withBackoff } from '../utils/backoff.js';
 import type { ModelTier } from '../types/index.js';
 
 // v3.4.0: Read OAuth token from Claude credentials file if env var not set
+// Set at module load time so ALL child processes inherit it
 function getOAuthToken(): string | null {
   if (process.env.CLAUDE_CODE_OAUTH_TOKEN) return process.env.CLAUDE_CODE_OAUTH_TOKEN;
   const credsPath = join(process.env.HOME ?? '', '.claude', '.credentials.json');
@@ -18,6 +19,13 @@ function getOAuthToken(): string | null {
     const creds = JSON.parse(readFileSync(credsPath, 'utf-8'));
     return creds?.claudeAiOauth?.accessToken ?? null;
   } catch { return null; }
+}
+
+// Auto-set token at module load so SDK child processes inherit it
+const _autoToken = getOAuthToken();
+if (_autoToken && !process.env.CLAUDE_CODE_OAUTH_TOKEN) {
+  process.env.CLAUDE_CODE_OAUTH_TOKEN = _autoToken;
+  console.log('[auth] OAuth token loaded from ~/.claude/.credentials.json');
 }
 
 export interface ExecutorResult {

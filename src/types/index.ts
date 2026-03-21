@@ -150,9 +150,17 @@ export interface WraithConfig {
 export type AgentId = string;
 
 // Ontology types -- generated from recon by LLM
+// v3.5.0 BUG-52: Added notable_entities for ontology-driven vector seeding
+export interface NotableEntity {
+  type: string;
+  name: string;
+  host: string;
+  significance: string;
+}
 export interface AttackOntology {
   entity_types: OntologyEntityType[];
   edge_types: OntologyEdgeType[];
+  notable_entities?: NotableEntity[];
   generated_at: string;
 }
 export interface OntologyEntityType {
@@ -219,6 +227,8 @@ export interface AgentRoundResult {
   vectors_opened: string[];
   vectors_blocked: string[];
   refused?: boolean;
+  no_findings?: boolean;
+  partial_timeout?: boolean;
 }
 export interface GraphDelta {
   nodes_added: string[];
@@ -227,7 +237,7 @@ export interface GraphDelta {
   vectors_opened: string[];
   vectors_closed: string[];
   credentials_gained: number;
-  access_levels_changed: Array<{ ip: string; from: string; to: string }>;
+  access_levels_changed: Array<{ ip: string; from: string; to: string; source_agent?: string; source_timestamp?: string }>;
 }
 
 // Budget tracking

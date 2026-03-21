@@ -38,6 +38,14 @@ Return ONLY a JSON object matching this schema (no markdown fences, no explanati
       "target_types": ["<entity type names>"]
     }
   ],
+  "notable_entities": [
+    {
+      "type": "<entity type: RPCEndpoint, WebApplication, Vulnerability, Credential, etc>",
+      "name": "<specific finding name, e.g. PetitPotam (MS-EFSRPC)>",
+      "host": "<IP or hostname where found>",
+      "significance": "<why this is a high-value finding for attack planning>"
+    }
+  ],
   "generated_at": "<ISO-8601 timestamp>"
 }
 ```
@@ -66,6 +74,20 @@ Always include these base relationships:
 
 You may add additional edge types if warranted (e.g., MEMBER_OF, ADMIN_OF, HOSTS_APP, EXPOSES_SHARE).
 
+## Notable Entities (v3.5.0)
+
+In addition to the schema, scan the recon data for HIGH-VALUE findings and list them in `notable_entities`. These are specific instances (not types) that the attack planner should prioritize. Look for:
+
+- **RPCEndpoint mentions:** PetitPotam (MS-EFSRPC), PrintNightmare (MS-RPRN/MS-PAR), DCSync interfaces (MS-DRSR/DRSUAPI)
+- **WebApplication misconfigurations:** allow_url_include=ON, disable_functions=NONE, exposed admin panels
+- **Known vulnerable services:** Outdated Apache, PHP, IIS versions with known CVEs
+- **Default credentials:** Any indication of factory-default usernames/passwords still in use
+- **Anonymous access:** LDAP anonymous bind, SMB null sessions, anonymous RPC, anonymous FTP
+- **Sensitive shares:** SYSVOL, NETLOGON, C$, ADMIN$ accessible without authentication
+- **DVWA/intentionally vulnerable apps:** Explicitly flag these as high-priority test targets
+
+Each notable entity must specify the host IP where it was discovered. The `significance` field should explain why it matters for attack planning.
+
 ## Rules
 
 - Maximum 10 entity types (keep it focused on what recon actually found)
@@ -74,4 +96,5 @@ You may add additional edge types if warranted (e.g., MEMBER_OF, ADMIN_OF, HOSTS
 - Examples should come from the actual recon data, not hypothetical
 - If recon found Active Directory, include AD-specific types (DomainController, DomainUser, Group)
 - If recon found web applications, include WebApplication type
+- Extract notable_entities from the recon data -- these are concrete findings, not schema types
 - generated_at must be the current ISO-8601 timestamp

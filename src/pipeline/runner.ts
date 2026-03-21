@@ -238,19 +238,81 @@ async function spawnAgent(
   const duration = Date.now() - start;
 
   if (result === null) {
-    // Timeout -- actually kill the SDK process
+    // Timeout -- kill the SDK process
     handle.abort();
     console.log(`  [timeout] ${agentId} killed after ${profile.timeout_sec}s`);
+
+    // BUG-45: Harvest achievements from attacks.jsonl before declaring timeout
+    const attackLog = join(logDir, 'attacks.jsonl');
+    let harvestedSuccesses: string[] = [];
+    if (existsSync(attackLog)) {
+      try {
+        const lines = readFileSync(attackLog, 'utf-8').trim().split('\n');
+        for (const line of lines) {
+          try {
+            const event = JSON.parse(line);
+            if (event.tool && String(event.details ?? '').includes(agentId.split('-')[0]) ||
+                (event.timestamp && event.result === 'success')) {
+              // Check if this event belongs to our agent by matching template prefix in details
+              const agentPrefix = profile.prompt_template;
+              if (String(event.details ?? '').toLowerCase().includes(agentPrefix) ||
+                  String(event.tool ?? '').toLowerCase().includes(agentPrefix)) {
+                harvestedSuccesses.push(event.techniqueName ?? event.technique ?? 'unknown');
+              }
+            }
+          } catch { /* skip */ }
+        }
+      } catch { /* skip */ }
+    }
+
+    // BUG-45: Also scan for evidence files
+    const timeoutEvidence: string[] = [];
+    try {
+      const files = readdirSync(logDir);
+      for (const f of files) {
+        if (f.includes(profile.prompt_template) && (f.endsWith('_evidence.md') || f.endsWith('_deliverable.json'))) {
+          timeoutEvidence.push(f);
+        }
+      }
+    } catch { /* skip */ }
+
+    const hasAchievements = harvestedSuccesses.length > 0 || timeoutEvidence.length > 0;
+
+    // BUG-51: Write output file for timed-out agents
+    try {
+      writeFileSync(join(logDir, `agent-${agentId}-output.md`), [
+        `# Agent: ${agentId}`,
+        `Template: ${profile.prompt_template}`,
+        `Target: ${profile.target_ip}`,
+        `Turns: 0`,
+        `Success: ${hasAchievements}`,
+        `Duration: ${duration}ms`,
+        `Status: ${hasAchievements ? 'PARTIAL_TIMEOUT' : 'TIMEOUT'}`,
+        ``,
+        `## Output`,
+        `Agent timed out after ${profile.timeout_sec}s.`,
+        hasAchievements ? `\n## Achievements (harvested from attacks.jsonl)\n${harvestedSuccesses.map(s => `- ${s}`).join('\n')}` : '',
+        timeoutEvidence.length > 0 ? `\n## Evidence Files\n${timeoutEvidence.join('\n')}` : '',
+      ].join('\n'));
+    } catch { /* non-critical */ }
+
+    if (hasAchievements) {
+      console.log(`  [harvest] ${agentId}: timed out but found ${harvestedSuccesses.length} achievements + ${timeoutEvidence.length} evidence files`);
+    }
+
     return {
       agent_id: agentId,
-      success: false,
-      result_summary: `TIMEOUT after ${profile.timeout_sec}s`,
+      success: hasAchievements,
+      result_summary: hasAchievements
+        ? `PARTIAL (timed out after ${profile.timeout_sec}s but achieved: ${harvestedSuccesses.join(', ')})`
+        : `TIMEOUT after ${profile.timeout_sec}s`,
       duration_ms: duration,
       turns_used: 0,
-      evidence_files: [],
+      evidence_files: timeoutEvidence,
       credentials_found: 0,
       vectors_opened: [],
-      vectors_blocked: [],
+      vectors_blocked: hasAchievements ? [] : [profile.technique_name],
+      partial_timeout: true,
     };
   }
 
@@ -264,22 +326,20 @@ async function spawnAgent(
     if (existsSync(join(logDir, f))) evidenceFiles.push(f);
   }
 
-  // v3.1.0 A1: Save full agent output to disk
-  if (result.result) {
-    try {
-      writeFileSync(join(logDir, `agent-${agentId}-output.md`), [
-        `# Agent: ${agentId}`,
-        `Template: ${profile.prompt_template}`,
-        `Target: ${profile.target_ip}`,
-        `Turns: ${result.turns ?? 0}`,
-        `Success: ${result.success}`,
-        `Duration: ${duration}ms`,
-        ``,
-        `## Output`,
-        result.result,
-      ].join('\n'));
-    } catch { /* non-critical */ }
-  }
+  // BUG-51: Save agent output to disk for ALL agents (not just those with output)
+  try {
+    writeFileSync(join(logDir, `agent-${agentId}-output.md`), [
+      `# Agent: ${agentId}`,
+      `Template: ${profile.prompt_template}`,
+      `Target: ${profile.target_ip}`,
+      `Turns: ${result.turns ?? 0}`,
+      `Success: ${result.success}`,
+      `Duration: ${duration}ms`,
+      ``,
+      `## Output`,
+      result.result ?? '(no output)',
+    ].join('\n'));
+  } catch { /* non-critical */ }
 
   // BUG-38: Detect refusal essays (agent said no instead of using tools)
   const REFUSAL_PATTERNS = [
@@ -301,8 +361,13 @@ async function spawnAgent(
     refused = REFUSAL_PATTERNS.some(p => result.result!.includes(p));
   }
 
-  const effectiveSuccess = refused ? false : result.success;
-  const label = refused ? 'REFUSED' : effectiveSuccess ? 'SUCCESS' : 'FAILED';
+  // BUG-43: Check for evidence -- "success" with no output is no_findings
+  const hasEvidence = evidenceFiles.length > 0 ||
+    (result.result && result.result.length > 50 && result.result !== '(no output)');
+  const noFindings = !refused && result.success && !hasEvidence;
+
+  const effectiveSuccess = refused ? false : (noFindings ? false : result.success);
+  const label = refused ? 'REFUSED' : noFindings ? 'NO_FINDINGS' : effectiveSuccess ? 'SUCCESS' : 'FAILED';
   console.log(`  [done] ${agentId}: ${label} (${result.turns ?? 0} turns, ${duration}ms)`);
 
   return {
@@ -316,6 +381,7 @@ async function spawnAgent(
     vectors_opened: [],
     vectors_blocked: effectiveSuccess ? [] : [profile.technique_name],
     refused,
+    no_findings: noFindings,
   };
 }
 
@@ -485,10 +551,13 @@ export async function runPipeline(configPath: string): Promise<void> {
   // =====================================================
   console.log('[pipeline] Phase: ATTACK LOOP');
   const planner = new AttackPlanner();
+  planner.setOntology(ontology); // v3.5.0 BUG-52: Wire ontology into planner
   const evaluator = new Evaluator();
-  const limiter = new ConcurrencyLimiter(planning.max_concurrent_agents);
+  let currentConcurrency = planning.max_concurrent_agents;
+  let limiter = new ConcurrencyLimiter(currentConcurrency);
   const history: RoundResult[] = [];
   let agentsSpawned = 1; // recon counted
+  let consecutiveStallRounds = 0; // BUG-42: track for sequential fallback
   const usedAgentIds = new Set<string>(['recon-r0']); // v3.1.0 E3: track for dedup
   const omClient = new OpenMemoryClient(); // v3.1.0 C2: for fact storage
 
@@ -588,6 +657,9 @@ export async function runPipeline(configPath: string): Promise<void> {
         const delta = evaluator.evaluate(agentResult, logDir, attackGraph, credStore);
         roundResults.push(agentResult);
 
+        // BUG-49: Harvest credentials immediately so next agents in batch can use them
+        evaluator.harvestCredentials(logDir);
+
         // v3.1.0 C2: Store facts to OpenMemory (fire-and-forget)
         omClient.store(
           `[Round ${round}] ${agentResult.agent_id}: ${agentResult.success ? 'SUCCESS' : 'FAILED'} -- ${agentResult.result_summary.substring(0, 200)}`,
@@ -617,6 +689,20 @@ export async function runPipeline(configPath: string): Promise<void> {
       graph_delta: roundDelta,
     };
     history.push(roundResult);
+
+    // BUG-42: Sequential fallback -- if >50% agents stalled (0 turns), reduce concurrency
+    const stallCount = roundResults.filter(r => r.turns_used === 0 && r.duration_ms > 25000 && !r.partial_timeout).length;
+    if (stallCount > roundResults.length / 2 && currentConcurrency > 1) {
+      currentConcurrency = 1;
+      limiter = new ConcurrencyLimiter(currentConcurrency);
+      consecutiveStallRounds++;
+      console.log(`  [fallback] ${stallCount}/${roundResults.length} agents stalled -- reducing concurrency to ${currentConcurrency}`);
+    } else if (stallCount === 0 && currentConcurrency < planning.max_concurrent_agents) {
+      // Recover concurrency if round was healthy
+      currentConcurrency = planning.max_concurrent_agents;
+      limiter = new ConcurrencyLimiter(currentConcurrency);
+      consecutiveStallRounds = 0;
+    }
 
     // Update session memory
     const succeeded = roundResults.filter(r => r.success).length;

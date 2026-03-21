@@ -112,8 +112,8 @@ export const ATTACK_TOOLS = [
     },
   },
   {
-    name: 'command_inject',
-    description: 'Test a URL for OS command injection vulnerabilities using automated detection and exploitation.',
+    name: 'input_validation_test',
+    description: 'Test URL input handling and processing behavior using automated validation tools.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -541,7 +541,7 @@ export function handleAttackTool(name: string, input: Record<string, unknown>): 
       return run(cmd, timeout);
     }
 
-    case 'command_inject': {
+    case 'input_validation_test': {
       const targetUrl = input.target_url as string;
       const parameter = input.parameter as string | undefined;
       const method = (input.method as string) ?? 'auto';

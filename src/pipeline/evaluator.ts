@@ -291,15 +291,37 @@ export class Evaluator {
     return hasSoarKeyword && hasBlockIndicator;
   }
 
-  // v3.4.0: Classify agent outcome for logging/analysis (BUG-38: refusal detection)
-  classifyAgentOutcome(result: AgentRoundResult): 'success' | 'clean_failure' | 'timeout' | 'refusal' | 'soar_block' {
+  // v3.5.0: Classify agent outcome (BUG-38 refusal + BUG-45 partial_success + BUG-43 no_findings)
+  classifyAgentOutcome(result: AgentRoundResult): 'success' | 'partial_success' | 'completed_no_findings' | 'clean_failure' | 'timeout' | 'refusal' | 'soar_block' | 'sdk_stall' {
     if (result.refused) return 'refusal';
+    if (result.partial_timeout && result.success) return 'partial_success';
+    if (result.no_findings) return 'completed_no_findings';
     if (result.success) return 'success';
     if (result.result_summary.startsWith('TIMEOUT')) return 'timeout';
+    if (result.turns_used === 0 && result.duration_ms > 25000) return 'sdk_stall';
     if (result.result_summary.toLowerCase().includes('soar') ||
         result.result_summary.toLowerCase().includes('firewall')) return 'soar_block';
     if (result.turns_used === 0 && result.duration_ms < 5000) return 'refusal';
     return 'clean_failure';
+  }
+
+  // v3.5.0 BUG-49: Harvest credentials from attacks.jsonl mid-round
+  harvestCredentials(logDir: string): void {
+    const attackLog = join(logDir, 'attacks.jsonl');
+    if (!existsSync(attackLog)) return;
+    const lines = readFileSync(attackLog, 'utf-8').trim().split('\n');
+    for (const line of lines.slice(this.lastEvalLine)) {
+      try {
+        const event = JSON.parse(line);
+        if (event.result === 'success' && event.details) {
+          const lower = event.details.toLowerCase();
+          if (lower.includes('cracked') || lower.includes('credential') || lower.includes('password') || lower.includes('login')) {
+            // Credential discovery detected -- credential store handles dedup
+            this.lastEvalLine = lines.indexOf(line) + 1;
+          }
+        }
+      } catch { /* skip malformed */ }
+    }
   }
 
   private techniqueToVector(technique: string): string | null {

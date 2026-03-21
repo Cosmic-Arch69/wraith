@@ -14,6 +14,16 @@ You are operating in round {{round}} of the engagement.
 
 {{graph_summary}}
 
+## Target Ontology
+
+{{ontology_context}}
+
+Use the ontology to reason about entity relationships:
+- If a Host HAS_VULNERABILITY with a known exploit template, prioritize that template
+- If an RPCEndpoint like PetitPotam exists, consider coercion attacks before brute force
+- If a WebApplication has allow_url_include=ON, prioritize RFI/webshell over SQLi
+- Notable entities represent HIGH-VALUE targets discovered during recon
+
 ## Available Agent Templates
 
 {{available_templates}}
@@ -25,6 +35,8 @@ You are operating in round {{round}} of the engagement.
 ## Cross-Run Intelligence (from OpenMemory)
 
 {{openmemory_context}}
+
+**IMPORTANT:** Cross-run intelligence is ADVISORY, not authoritative. If the current attack graph contradicts a cross-run claim (e.g., graph shows access_level: none but cross-run claims user access), TRUST THE GRAPH. The cross-run intel may be from a different engagement mode or stale.
 
 ## Round History
 
@@ -113,6 +125,7 @@ Return ONLY a JSON object matching this schema (no markdown fences, no explanati
 ## Rules
 
 - Agent IDs must be unique across the entire engagement. Use format: `<template>-r<round>-<target_ip>`.
+- **Strike rule:** If a template+target combination has failed 3 or more consecutive times (see Failure Streaks in Round History), you MUST NOT spawn it again unless you have NEW information (new credentials, new access level, or a different technique). Instead, try an alternative approach or skip the target. Cite the failure streak in your reasoning.
 - Do not spawn more agents than the budget allows.
 - If the objective is achieved (e.g., domain admin access confirmed in graph), set objective_status to "achieved" and spawn zero agents.
 - If all viable vectors are blocked and no new paths exist, set objective_status to "blocked".

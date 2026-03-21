@@ -12,12 +12,20 @@ import { OpenMemoryClient } from './openmemory-client.js';
 import type {
   ActionPlan,
   AgentProfile,
+  AttackOntology,
   BudgetState,
   RoundResult,
   WraithV3Config,
 } from '../types/index.js';
 
 export class AttackPlanner {
+  // v3.5.0 BUG-52: Ontology stored for planner prompt injection
+  private ontology: AttackOntology | null = null;
+
+  setOntology(ontology: AttackOntology): void {
+    this.ontology = ontology;
+  }
+
   async generateInitialPlan(
     graphService: AttackGraphService,
     config: WraithV3Config,
@@ -130,6 +138,29 @@ export class AttackPlanner {
       omContext = await om.query(`wraith attack findings for ${config.target.domain}`);
     } catch { omContext = 'OpenMemory unavailable.'; }
 
+    // BUG-44: Validate cross-run intel against current graph state
+    if (omContext && omContext !== 'OpenMemory unavailable.') {
+      const graph = graphService.getGraphSnapshot();
+      // Check for stale access claims
+      const accessClaims = omContext.match(/access[_\s]level[:\s]+(user|admin|system)/gi) ?? [];
+      for (const claim of accessClaims) {
+        const level = claim.match(/(user|admin|system)/i)?.[1]?.toLowerCase();
+        // If any node has access_level: none but cross-run claims higher, warn
+        for (const node of Object.values(graph.nodes)) {
+          if (node.access_level === 'none' && level && level !== 'none') {
+            omContext = `[ADVISORY -- verify against current graph] ${omContext}`;
+            break;
+          }
+        }
+      }
+    }
+
+    // BUG-50: Compute failure streaks for planner context
+    const failureStreaks = this.computeFailureStreaks(history);
+
+    // v3.5.0 BUG-52: Format ontology for planner context
+    const ontologyContext = this.formatOntologyForPlanner(this.ontology);
+
     try {
       const prompt = await loadPrompt('planner', {
         round: String(round),
@@ -139,10 +170,11 @@ export class AttackPlanner {
         budget_agents: String(budget.max_total_agents - budget.agents_spawned),
         graph_summary: graphSummary,
         available_templates: templates,
-        round_history: historyStr,
+        round_history: historyStr + (failureStreaks ? `\n\n## Failure Streaks\n${failureStreaks}` : ''),
         max_concurrent: String(budget.max_concurrent),
         credential_state: credentialState,
         openmemory_context: omContext,
+        ontology_context: ontologyContext,
       });
 
       // v3.1.0 E4: Retry JSON parse before fallback (BUG-13 fix)
@@ -381,6 +413,38 @@ export class AttackPlanner {
     return agents;
   }
 
+  // v3.5.0 BUG-52: Format ontology into readable context block for planner prompt
+  formatOntologyForPlanner(ontology: AttackOntology | null): string {
+    if (!ontology) return 'No ontology available.';
+
+    const parts: string[] = [];
+
+    // Entity types
+    const entityNames = ontology.entity_types.map(t => t.name).join(', ');
+    parts.push(`Entity types: ${entityNames}`);
+
+    // Key relationships
+    if (ontology.edge_types.length > 0) {
+      parts.push('Key relationships:');
+      for (const edge of ontology.edge_types) {
+        const src = edge.source_types?.join('/') || '*';
+        const tgt = edge.target_types?.join('/') || '*';
+        parts.push(`- ${src} ${edge.name} ${tgt}`);
+      }
+    }
+
+    // Notable entities
+    if (ontology.notable_entities && ontology.notable_entities.length > 0) {
+      parts.push('');
+      parts.push('Notable entities discovered:');
+      for (const entity of ontology.notable_entities) {
+        parts.push(`- ${entity.type}: ${entity.name} on ${entity.host} -- ${entity.significance}`);
+      }
+    }
+
+    return parts.join('\n');
+  }
+
   private vectorToTemplate(vector: string): string | null {
     // v3.1.0 E1: Expanded from 15 to 30+ entries
     const map: Record<string, string> = {
@@ -390,6 +454,10 @@ export class AttackPlanner {
       'dvwa-fileupload-rce': 'cmdi', 'dvwa-rfi': 'cmdi', 'php-rce': 'cmdi',
       'xampp-misconfiguration': 'auth-attack', 'mariadb-direct-access': 'sqli',
       'web-admin': 'auth-attack', 'pfsense-webgui-bruteforce': 'auth-attack',
+      // v3.5.0 BUG-52: Ontology-driven vectors
+      'rfi-webshell': 'cmdi', 'coercion-petitpotam': 'lateral',
+      'coercion-printnightmare': 'lateral', 'default-creds': 'auth-attack',
+      'anonymous-access': 'recon',
       // Credential attacks
       'kerberoast': 'kerberoast', 'asreproast': 'kerberoast',
       'smb-brute': 'bruteforce', 'rdp-brute': 'bruteforce', 'rdp-bruteforce': 'bruteforce',
@@ -427,6 +495,13 @@ export class AttackPlanner {
       'asreproast': 'T1558.004',
       'ldap-enum': 'T1087',
       'ssh-brute': 'T1110',
+      // v3.5.0 BUG-52: Ontology-driven vector techniques
+      'rfi-webshell': 'T1190',
+      'php-rce': 'T1059',
+      'coercion-petitpotam': 'T1187',
+      'coercion-printnightmare': 'T1187',
+      'default-creds': 'T1078',
+      'anonymous-access': 'T1087',
     };
     return map[vector] ?? 'T0000';
   }
@@ -438,5 +513,39 @@ export class AttackPlanner {
     const end = jsonStr.lastIndexOf('}');
     if (start === -1 || end === -1) throw new Error('No JSON object found in planner output');
     return JSON.parse(jsonStr.substring(start, end + 1));
+  }
+
+  // v3.5.0 BUG-50: Compute failure streaks for planner context
+  private computeFailureStreaks(history: RoundResult[]): string {
+    const streaks = new Map<string, { count: number; rounds: number[] }>();
+
+    for (const round of history) {
+      for (const agent of round.agent_results) {
+        const template = agent.agent_id.split('-')[0]; // e.g., "privesc" from "privesc-r4-172.16.20.5"
+        const target = agent.agent_id.split('-').slice(2).join('-'); // e.g., "172.16.20.5"
+        const key = `${template}:${target}`;
+
+        if (!agent.success) {
+          const existing = streaks.get(key) ?? { count: 0, rounds: [] };
+          existing.count++;
+          existing.rounds.push(round.round);
+          streaks.set(key, existing);
+        } else {
+          // Reset streak on success
+          streaks.delete(key);
+        }
+      }
+    }
+
+    // Only report streaks of 3+
+    const lines: string[] = [];
+    for (const [key, data] of streaks) {
+      if (data.count >= 3) {
+        const [template, target] = key.split(':');
+        lines.push(`- ${template} on ${target}: FAILED ${data.count} consecutive times (Rounds ${data.rounds.join(', ')}). STRIKE RULE: Do NOT spawn again without new information.`);
+      }
+    }
+
+    return lines.length > 0 ? lines.join('\n') : '';
   }
 }

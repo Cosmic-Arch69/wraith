@@ -142,6 +142,21 @@ export class GraphBuilder {
         }
       }
 
+      // v3.5.0 BUG-52: Ontology-driven vector seeding
+      if (ontology?.notable_entities) {
+        for (const entity of ontology.notable_entities) {
+          if (entity.host === ip || entity.host === hostname) {
+            const eName = entity.name.toLowerCase();
+            if (eName.includes('petitpotam')) { if (!vectors.includes('coercion-petitpotam')) vectors.push('coercion-petitpotam'); }
+            if (eName.includes('printnightmare')) { if (!vectors.includes('coercion-printnightmare')) vectors.push('coercion-printnightmare'); }
+            if (eName.includes('allow_url_include')) { if (!vectors.includes('rfi-webshell')) vectors.push('rfi-webshell'); }
+            if (eName.includes('disable_functions')) { if (!vectors.includes('php-rce')) vectors.push('php-rce'); }
+            if (eName.includes('default') && eName.includes('cred')) { if (!vectors.includes('default-creds')) vectors.push('default-creds'); }
+            if (eName.includes('anonymous')) { if (!vectors.includes('anonymous-access')) vectors.push('anonymous-access'); }
+          }
+        }
+      }
+
       // BUG-40: Deduplicate services -- remove 'unknown:PORT' when named 'service:PORT' exists
       const namedPorts = new Set<number>();
       for (const svc of services) {

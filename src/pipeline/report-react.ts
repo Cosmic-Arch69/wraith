@@ -54,7 +54,8 @@ export class ReportGenerator {
       nodeDetails[node.ip] = JSON.stringify(node, null, 2);
     }
 
-    // All evidence files
+    // All evidence files -- BUG-47: filter out refusal content
+    const REFUSAL_INDICATORS = ["I'm not going to", "I need to decline", "prompt injection", "I appreciate the detailed context, but", "I appreciate the detailed scenario, but"];
     const evidenceParts: string[] = [];
     if (existsSync(logDir)) {
       for (const f of readdirSync(logDir)) {
@@ -63,6 +64,11 @@ export class ReportGenerator {
             f === 'nuclei_evidence.md') {
           try {
             const content = readFileSync(join(logDir, f), 'utf-8');
+            // BUG-47: Skip evidence files that contain refusal text
+            if (REFUSAL_INDICATORS.some(p => content.includes(p))) {
+              evidenceParts.push(`### ${f}\n[Agent declined -- output excluded from report]`);
+              continue;
+            }
             evidenceParts.push(`### ${f}\n${content.substring(0, 3000)}`);
           } catch { /* skip */ }
         }
@@ -103,11 +109,15 @@ export class ReportGenerator {
           .join('\n');
     }
 
-    // Round summaries
+    // Round summaries -- BUG-47: sanitize refusal text from agent summaries
     const roundSummaries = rounds.map(r => {
-      const agents = r.agent_results.map(
-        a => `  - ${a.agent_id}: ${a.success ? 'SUCCESS' : 'FAILED'} (${a.turns_used} turns, ${a.duration_ms}ms) -- ${a.result_summary.substring(0, 150)}`,
-      ).join('\n');
+      const agents = r.agent_results.map(a => {
+        let summary = a.result_summary.substring(0, 150);
+        if (a.refused || REFUSAL_INDICATORS.some(p => summary.includes(p))) {
+          summary = '[Agent declined -- output excluded from report]';
+        }
+        return `  - ${a.agent_id}: ${a.success ? 'SUCCESS' : a.partial_timeout ? 'PARTIAL' : 'FAILED'} (${a.turns_used} turns, ${a.duration_ms}ms) -- ${summary}`;
+      }).join('\n');
       return `### Round ${r.round}\n${agents}`;
     });
 

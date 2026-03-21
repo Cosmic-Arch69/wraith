@@ -291,13 +291,14 @@ export class Evaluator {
     return hasSoarKeyword && hasBlockIndicator;
   }
 
-  // v3.3.0: Classify agent outcome for logging/analysis
+  // v3.4.0: Classify agent outcome for logging/analysis (BUG-38: refusal detection)
   classifyAgentOutcome(result: AgentRoundResult): 'success' | 'clean_failure' | 'timeout' | 'refusal' | 'soar_block' {
+    if (result.refused) return 'refusal';
     if (result.success) return 'success';
-    if (result.turns_used === 0 && result.duration_ms < 5000) return 'refusal';
     if (result.result_summary.startsWith('TIMEOUT')) return 'timeout';
     if (result.result_summary.toLowerCase().includes('soar') ||
         result.result_summary.toLowerCase().includes('firewall')) return 'soar_block';
+    if (result.turns_used === 0 && result.duration_ms < 5000) return 'refusal';
     return 'clean_failure';
   }
 

@@ -142,9 +142,21 @@ export class GraphBuilder {
         }
       }
 
+      // BUG-40: Deduplicate services -- remove 'unknown:PORT' when named 'service:PORT' exists
+      const namedPorts = new Set<number>();
+      for (const svc of services) {
+        const parts = svc.split(':');
+        if (parts[0] !== 'unknown' && parts[1]) namedPorts.add(parseInt(parts[1], 10));
+      }
+      const dedupedServices = services.filter(svc => {
+        if (!svc.startsWith('unknown:')) return true;
+        const port = parseInt(svc.split(':')[1] ?? '0', 10);
+        return !namedPorts.has(port);
+      });
+
       graphService.updateNode(ip, {
         ...updates,
-        services,
+        services: dedupedServices,
         vectors_open: vectors,
       } as Parameters<AttackGraphService['updateNode']>[1]);
     }

@@ -24,39 +24,38 @@ Logging standard (BEFORE + AFTER each technique):
 
 ## Phase 0 Tasks
 
-Run the following steps in order. Use `execute_command` for all shell commands. Log each discovered service with `log_attack`.
+Run the following steps in order. Use structured tool calls for scanning and fingerprinting. Use `execute_command` only for lightweight probes (banner grabs, SSL inspection, curl checks) where no dedicated tool exists. Log each discovered service with `log_attack`.
 
 ### 1. Full Port Scan
 
 Scan all 65535 ports on the WAN IP to find every exposed service:
 
-```bash
-nmap -sV -sC -p- {{wan_ip}} --open -T4 2>&1
+```
+network_scan({target: "{{wan_ip}}", ports: "all", scan_type: "tcp_connect", filter: "open", timing: 4})
 ```
 
-Record every open port and the service/version nmap identifies.
+Record every open port and the service/version identified.
 
 ### 2. Service Fingerprinting
 
 For each open port discovered in step 1, run a targeted version probe:
 
-```bash
-# Example for a specific port -- repeat for each discovered port
-nmap -sV -sC -p <PORT> {{wan_ip}} --version-intensity 9 2>&1
+```
+network_scan({target: "{{wan_ip}}", ports: "<PORT>", version_detection: true, version_intensity: 9, scripts: ["default"]})
 ```
 
 Identify the service type: HTTP, HTTPS, RDP, SSH, or unknown.
 
 ### 3. Banner Grab + SSL Certificate Inspection
 
-For every open port:
+For every open port (lightweight probes -- execute_command acceptable):
 
-```bash
+```
 # Banner grab (TCP)
-nc -w 3 {{wan_ip}} <PORT> 2>&1 <<< ""
+execute_command("nc -w 3 {{wan_ip}} <PORT> 2>&1 <<< \"\"")
 
 # SSL cert inspection (for any TLS port)
-echo | openssl s_client -connect {{wan_ip}}:<PORT> -servername {{wan_ip}} 2>&1 | openssl x509 -noout -text 2>&1
+execute_command("echo | openssl s_client -connect {{wan_ip}}:<PORT> -servername {{wan_ip}} 2>&1 | openssl x509 -noout -text 2>&1")
 ```
 
 Extract from SSL certs: CN, SAN, issuer, expiry. These may reveal internal hostnames or domain names.
@@ -76,13 +75,14 @@ Document your inferences with confidence levels: `confirmed`, `likely`, `possibl
 
 For each HTTP/HTTPS port discovered:
 
-```bash
-curl -s -D - -o /dev/null {{wan_ip}}:<PORT> 2>&1
-curl -s -D - -o /dev/null https://{{wan_ip}}:<PORT> -k 2>&1
+```
+# HTTP header probe (lightweight -- execute_command acceptable here)
+execute_command("curl -s -D - -o /dev/null {{wan_ip}}:<PORT> 2>&1")
+execute_command("curl -s -D - -o /dev/null https://{{wan_ip}}:<PORT> -k 2>&1")
 
 # Technology fingerprinting
-whatweb http://{{wan_ip}}:<PORT> 2>&1
-whatweb https://{{wan_ip}}:<PORT> --no-check-certificate 2>&1
+web_discover({target_url: "http://{{wan_ip}}:<PORT>", mode: "tech"})
+web_discover({target_url: "https://{{wan_ip}}:<PORT>", mode: "tech", skip_cert_verify: true})
 ```
 
 Extract: Server header, X-Powered-By, Set-Cookie app fingerprints, redirect chains, app titles.

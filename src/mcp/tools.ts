@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import type { AttackEvent } from '../types/index.js';
 import { CRED_TOOLS, handleCredTool } from './cred-tools.js';
 import { GRAPH_TOOLS, handleGraphTool } from './graph-tools.js';
+import { ATTACK_TOOLS, handleAttackTool, ATTACK_TOOL_NAMES } from './attack-tools.js';
 
 const CORE_PENTEST_TOOLS = [
   {
@@ -145,6 +146,7 @@ export const PENTEST_TOOLS = [
   ...CORE_PENTEST_TOOLS,
   ...CRED_TOOLS,
   ...GRAPH_TOOLS,
+  ...ATTACK_TOOLS,
 ];
 
 const LOG_DIR = process.env.WRAITH_LOG_DIR ?? './attack-logs';
@@ -387,6 +389,9 @@ export function handleTool(name: string, input: Record<string, unknown>): string
       }
       if (['graph_update', 'graph_query'].includes(name)) {
         return handleGraphTool(name, input);
+      }
+      if (ATTACK_TOOL_NAMES.includes(name)) {
+        return handleAttackTool(name, input);
       }
       return `Unknown tool: ${name}`;
     }

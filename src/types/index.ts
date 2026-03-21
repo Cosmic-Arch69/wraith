@@ -218,6 +218,7 @@ export interface AgentRoundResult {
   credentials_found: number;
   vectors_opened: string[];
   vectors_blocked: string[];
+  refused?: boolean;
 }
 export interface GraphDelta {
   nodes_added: string[];

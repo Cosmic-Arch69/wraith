@@ -3,9 +3,22 @@
 // v3: Exponential backoff for OAuth rate limiting (RUN-5 fix)
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
+import { readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { resolveModel } from './models.js';
 import { withBackoff } from '../utils/backoff.js';
 import type { ModelTier } from '../types/index.js';
+
+// v3.4.0: Read OAuth token from Claude credentials file if env var not set
+function getOAuthToken(): string | null {
+  if (process.env.CLAUDE_CODE_OAUTH_TOKEN) return process.env.CLAUDE_CODE_OAUTH_TOKEN;
+  const credsPath = join(process.env.HOME ?? '', '.claude', '.credentials.json');
+  if (!existsSync(credsPath)) return null;
+  try {
+    const creds = JSON.parse(readFileSync(credsPath, 'utf-8'));
+    return creds?.claudeAiOauth?.accessToken ?? null;
+  } catch { return null; }
+}
 
 export interface ExecutorResult {
   result: string | null;
@@ -45,14 +58,13 @@ async function executeAgent(
   };
 
   // Pass through auth tokens -- subscription or API key
-  const passthrough = [
-    'CLAUDE_CODE_OAUTH_TOKEN',
-    'ANTHROPIC_API_KEY',
-    'ANTHROPIC_SMALL_MODEL',
-    'ANTHROPIC_MEDIUM_MODEL',
-    'ANTHROPIC_LARGE_MODEL',
-  ];
-  for (const key of passthrough) {
+  // v3.4.0: Read from credentials file if env var not set
+  const oauthToken = getOAuthToken();
+  if (oauthToken) sdkEnv['CLAUDE_CODE_OAUTH_TOKEN'] = oauthToken;
+  if (process.env.ANTHROPIC_API_KEY) sdkEnv['ANTHROPIC_API_KEY'] = process.env.ANTHROPIC_API_KEY;
+
+  const modelPassthrough = ['ANTHROPIC_SMALL_MODEL', 'ANTHROPIC_MEDIUM_MODEL', 'ANTHROPIC_LARGE_MODEL'];
+  for (const key of modelPassthrough) {
     if (process.env[key]) sdkEnv[key] = process.env[key]!;
   }
 
@@ -60,6 +72,7 @@ async function executeAgent(
   let turns = 0;
 
   try {
+    console.log(`  [sdk] ${agentName}: starting query (model=${resolveModel(modelTier)}, turns=${maxTurns}, cwd=${process.cwd()})`);
     for await (const message of query({
       prompt,
       options: {
@@ -75,8 +88,16 @@ async function executeAgent(
       },
     })) {
       turns++;
-      if (message.type === 'result' && !message.is_error) {
-        resultText = (message as import('@anthropic-ai/claude-agent-sdk').SDKResultSuccess).result ?? null;
+      if (message.type === 'result') {
+        const resultMsg = message as Record<string, unknown>;
+        console.log(`  [sdk] ${agentName}: msg #${turns} type=result is_error=${resultMsg.is_error} result=${String(resultMsg.result ?? '').substring(0, 500)}`);
+        if (!message.is_error) {
+          resultText = (message as import('@anthropic-ai/claude-agent-sdk').SDKResultSuccess).result ?? null;
+        } else {
+          resultText = String(resultMsg.result ?? resultMsg.error ?? 'unknown error');
+        }
+      } else {
+        console.log(`  [sdk] ${agentName}: msg #${turns} type=${message.type}`);
       }
     }
 

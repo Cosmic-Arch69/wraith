@@ -212,8 +212,13 @@ async function spawnAgent(
   };
 
   // BUG-32: Enforce minimum timeouts -- agents should finish via turn budget, not timeout
+  // The planner often sets aggressive timeouts (90-120s) that kill agents before they start
   const MIN_TIMEOUTS: Record<string, number> = {
-    recon: 1800, lateral: 1200, privesc: 1200, kerberoast: 900, bruteforce: 900,
+    recon: 1800, 'osint-recon': 1800,
+    lateral: 1200, privesc: 1200, pivot: 1200,
+    kerberoast: 900, bruteforce: 900,
+    sqli: 900, cmdi: 900, 'auth-attack': 900,
+    nuclei: 600,
   };
   const minTimeout = MIN_TIMEOUTS[profile.prompt_template];
   if (minTimeout && profile.timeout_sec < minTimeout) {

@@ -59,8 +59,12 @@ async function executeAgent(
 
   // Pass through auth tokens -- subscription or API key
   // v3.4.0: Read from credentials file if env var not set
+  // Set in BOTH sdkEnv AND process.env -- SDK child process needs it in system env
   const oauthToken = getOAuthToken();
-  if (oauthToken) sdkEnv['CLAUDE_CODE_OAUTH_TOKEN'] = oauthToken;
+  if (oauthToken) {
+    sdkEnv['CLAUDE_CODE_OAUTH_TOKEN'] = oauthToken;
+    process.env['CLAUDE_CODE_OAUTH_TOKEN'] = oauthToken;
+  }
   if (process.env.ANTHROPIC_API_KEY) sdkEnv['ANTHROPIC_API_KEY'] = process.env.ANTHROPIC_API_KEY;
 
   const modelPassthrough = ['ANTHROPIC_SMALL_MODEL', 'ANTHROPIC_MEDIUM_MODEL', 'ANTHROPIC_LARGE_MODEL'];

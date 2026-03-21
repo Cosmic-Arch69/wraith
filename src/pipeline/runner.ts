@@ -211,9 +211,9 @@ async function spawnAgent(
     },
   };
 
-  // BUG-32: Enforce minimum timeouts for long-running agents
+  // BUG-32: Enforce minimum timeouts -- agents should finish via turn budget, not timeout
   const MIN_TIMEOUTS: Record<string, number> = {
-    lateral: 300, privesc: 300, kerberoast: 180, bruteforce: 180,
+    recon: 1800, lateral: 1200, privesc: 1200, kerberoast: 900, bruteforce: 900,
   };
   const minTimeout = MIN_TIMEOUTS[profile.prompt_template];
   if (minTimeout && profile.timeout_sec < minTimeout) {

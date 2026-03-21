@@ -6,12 +6,17 @@ import { execSync } from 'node:child_process';
 
 // ── Shared execution helper ─────────────────────────────────────────────────
 
+// Ensure ~/.local/bin is in PATH for tools installed via go install / pip
+const HOME = process.env.HOME ?? '';
+const TOOL_PATH = `${HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`;
+
 function run(cmd: string, timeoutSec: number = 120): string {
   try {
     const output = execSync(cmd, {
       timeout: timeoutSec * 1000,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, PATH: TOOL_PATH },
     });
     return output || '(no output)';
   } catch (err: unknown) {

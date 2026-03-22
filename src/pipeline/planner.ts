@@ -180,7 +180,7 @@ export class AttackPlanner {
       // v3.1.0 E4: Retry JSON parse before fallback (BUG-13 fix)
       let plan: ActionPlan | null = null;
       for (let attempt = 0; attempt < 2; attempt++) {
-        const result = await runAgent(prompt, 'planner', 'medium', {}, 20);  // v3.2.0 BUG-21: increased from 10
+        const result = await runAgent(prompt, 'planner', 'medium', {}, 30);  // v3.6.0: increased from 20
         if (!result.success || !result.result) continue;
         try {
           plan = this.extractJSON(result.result) as ActionPlan;
@@ -192,7 +192,20 @@ export class AttackPlanner {
       }
       if (!plan) {
         console.warn('[planner] LLM planning failed after 2 attempts -- deterministic fallback');
-        return this.deterministicPlan(graphService, round, budget, config);
+        return this.deterministicPlan(graphService, round, budget, config, history);
+      }
+
+      // v3.6.0 BUG-NEW-11: Hard block repeat 0-turn failures
+      const blocked = this.getHardBlockedCombos(history);
+      if (blocked.size > 0) {
+        plan.agents_to_spawn = plan.agents_to_spawn.filter(a => {
+          const combo = `${a.prompt_template}:${a.target_ip}`;
+          if (blocked.has(combo)) {
+            console.log(`  [hard-block] LLM wanted ${a.id} but ${combo} has ${blocked.get(combo)} consecutive 0-turn failures`);
+            return false;
+          }
+          return true;
+        });
       }
 
       // Validate: cap agents at budget
@@ -201,7 +214,6 @@ export class AttackPlanner {
         plan.agents_to_spawn = plan.agents_to_spawn.slice(0, maxNew);
       }
       if (plan.agents_to_spawn.length > budget.max_concurrent) {
-        // Keep top priority agents
         plan.agents_to_spawn.sort((a, b) => b.priority - a.priority);
         plan.agents_to_spawn = plan.agents_to_spawn.slice(0, budget.max_concurrent);
       }
@@ -209,7 +221,7 @@ export class AttackPlanner {
       return plan;
     } catch (err) {
       console.warn(`[planner] Error during planning: ${err} -- using deterministic fallback`);
-      return this.deterministicPlan(graphService, round, budget, config);
+      return this.deterministicPlan(graphService, round, budget, config, history);
     }
   }
 
@@ -218,6 +230,7 @@ export class AttackPlanner {
     round: number,
     budget: BudgetState,
     config: WraithV3Config,
+    history: RoundResult[] = [],  // v3.6.0 BUG-NEW-11: needed for hard block check
   ): ActionPlan {
     const viableVectors = graphService.getViableVectors();
     const agents: AgentProfile[] = [];
@@ -273,7 +286,20 @@ export class AttackPlanner {
     }
 
     const credDriven = agents.filter(a => ['kerberoast', 'lateral', 'privesc'].includes(a.prompt_template)).length;
-    const objectiveStatus = agents.length === 0
+    // v3.6.0 BUG-NEW-11: Hard block repeat 0-turn failures in deterministic plan
+    const detBlocked = this.getHardBlockedCombos(history);
+    const filteredAgents = detBlocked.size > 0
+      ? agents.filter(a => {
+          const combo = `${a.prompt_template}:${a.target_ip}`;
+          if (detBlocked.has(combo)) {
+            console.log(`  [hard-block] Deterministic plan skipping ${a.id}: ${combo} has ${detBlocked.get(combo)} consecutive 0-turn failures`);
+            return false;
+          }
+          return true;
+        })
+      : agents;
+
+    const objectiveStatus = filteredAgents.length === 0
       ? (viableVectors.length === 0 ? 'achieved' : 'blocked')
       : budget.rounds_used >= budget.max_rounds
         ? 'budget_exhausted'
@@ -281,12 +307,12 @@ export class AttackPlanner {
 
     return {
       round,
-      agents_to_spawn: agents,
+      agents_to_spawn: filteredAgents,
       agents_to_skip: [],
       objective_status: objectiveStatus,
-      reasoning: `Deterministic fallback: ${agents.length} agents (${credDriven} credential-driven) for ${viableVectors.length} targets.`,
-      next_milestone: agents.length > 0
-        ? `Execute ${agents[0].technique_name} against ${agents[0].target_ip}`
+      reasoning: `Deterministic fallback: ${filteredAgents.length} agents (${credDriven} credential-driven) for ${viableVectors.length} targets.`,
+      next_milestone: filteredAgents.length > 0
+        ? `Execute ${filteredAgents[0].technique_name} against ${filteredAgents[0].target_ip}`
         : 'No viable vectors remaining',
     };
   }
@@ -516,6 +542,31 @@ export class AttackPlanner {
   }
 
   // v3.5.0 BUG-50: Compute failure streaks for planner context
+  // v3.6.0 BUG-NEW-11: Hard block for template:target combos with 2+ consecutive 0-turn failures
+  private getHardBlockedCombos(history: RoundResult[]): Map<string, number> {
+    const streaks = new Map<string, number>();
+
+    for (const round of history) {
+      for (const agent of round.agent_results) {
+        const template = agent.agent_id.split('-')[0];
+        const target = agent.agent_id.split('-').slice(2).join('-');
+        const key = `${template}:${target}`;
+
+        if (!agent.success && (agent.turns_used === 0 || agent.heartbeat_stalled)) {
+          streaks.set(key, (streaks.get(key) ?? 0) + 1);
+        } else if (agent.success) {
+          streaks.delete(key);
+        }
+      }
+    }
+
+    const blocked = new Map<string, number>();
+    for (const [key, count] of streaks) {
+      if (count >= 2) blocked.set(key, count);
+    }
+    return blocked;
+  }
+
   private computeFailureStreaks(history: RoundResult[]): string {
     const streaks = new Map<string, { count: number; rounds: number[] }>();
 

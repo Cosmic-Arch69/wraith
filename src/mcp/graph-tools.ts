@@ -124,6 +124,14 @@ export function handleGraphTool(name: string, input: Record<string, unknown>): s
         updates.status = input.status as 'up' | 'down' | 'blocked' | 'unknown';
       }
       if (input.access_level !== undefined) {
+        // v3.6.0 BUG-NEW-4/7: Log MCP access level updates (monotonic guard is in attack-graph.ts updateNode)
+        const currentNode = svc.queryNode(ip);
+        const currentLevel = currentNode?.access_level ?? 'none';
+        const proposed = input.access_level as string;
+        const RANK: Record<string, number> = { 'none': 0, 'user': 1, 'admin': 2, 'system': 3 };
+        if ((RANK[proposed] ?? 0) <= (RANK[currentLevel] ?? 0) && proposed !== currentLevel) {
+          console.log(`  [graph-guard] MCP blocked access_level downgrade on ${ip}: ${currentLevel} -> ${proposed}`);
+        }
         updates.access_level = input.access_level as 'none' | 'user' | 'admin' | 'system';
       }
       if (Array.isArray(input.services)) updates.services = input.services as string[];

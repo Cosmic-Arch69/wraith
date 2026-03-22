@@ -36,9 +36,11 @@ export interface ExecutorResult {
 }
 
 // v3.0.1: Handle for cancelling a running agent (BUG-7 fix)
+// v3.6.0 BUG-NEW-6/8: Added getTurns() for heartbeat monitoring and partial timeout turn count
 export interface ExecutorHandle {
   promise: Promise<ExecutorResult>;
   abort: () => void;
+  getTurns: () => number;
 }
 
 class RateLimitError extends Error {
@@ -58,6 +60,7 @@ async function executeAgent(
   mcpServers: Record<string, unknown>,
   maxTurns: number,
   abortController?: AbortController,
+  turnCounter?: { value: number },  // v3.6.0 BUG-NEW-6/8: shared mutable counter for external visibility
 ): Promise<ExecutorResult> {
   const start = Date.now();
 
@@ -81,6 +84,7 @@ async function executeAgent(
   }
 
   let resultText: string | null = null;
+  let lastAssistantText: string | null = null;  // v3.6.0 BUG-NEW-3: fallback for output capture
   let turns = 0;
 
   try {
@@ -100,6 +104,7 @@ async function executeAgent(
       },
     })) {
       turns++;
+      if (turnCounter) turnCounter.value = turns;  // v3.6.0 BUG-NEW-6/8: expose turn count externally
       if (message.type === 'result') {
         const resultMsg = message as Record<string, unknown>;
         console.log(`  [sdk] ${agentName}: msg #${turns} type=result is_error=${resultMsg.is_error} result=${String(resultMsg.result ?? '').substring(0, 500)}`);
@@ -109,8 +114,24 @@ async function executeAgent(
           resultText = String(resultMsg.result ?? resultMsg.error ?? 'unknown error');
         }
       } else {
+        // v3.6.0 BUG-NEW-3: Capture assistant text from non-result messages for output fallback
+        const msgAny = message as Record<string, unknown>;
+        if (typeof msgAny.content === 'string' && msgAny.content.length > 0) {
+          lastAssistantText = msgAny.content;
+        } else if (msgAny.type === 'assistant' && typeof msgAny.message === 'object' && msgAny.message !== null) {
+          const inner = msgAny.message as Record<string, unknown>;
+          if (typeof inner.content === 'string' && inner.content.length > 0) {
+            lastAssistantText = inner.content;
+          }
+        }
         console.log(`  [sdk] ${agentName}: msg #${turns} type=${message.type}`);
       }
+    }
+
+    // v3.6.0 BUG-NEW-3: Fallback to last assistant text if no result message captured
+    if (resultText === null && lastAssistantText) {
+      console.log(`  [sdk] ${agentName}: no result message -- falling back to last assistant text (${lastAssistantText.length} chars)`);
+      resultText = lastAssistantText;
     }
 
     // 0 turns = rate limited -- throw so backoff can retry
@@ -183,7 +204,7 @@ export async function runAgent(
 }
 
 // v3.0.1: Start an agent with an AbortController for cancellation (BUG-7 fix)
-// Returns a handle with the promise + abort function so the caller can kill it on timeout.
+// v3.6.0 BUG-NEW-6/8: Added shared turnCounter for heartbeat monitoring and partial timeout turn count
 export function startAgent(
   prompt: string,
   agentName: string,
@@ -192,12 +213,14 @@ export function startAgent(
   maxTurns: number = 150,
 ): ExecutorHandle {
   const controller = new AbortController();
-  const promise = executeAgent(prompt, agentName, modelTier, mcpServers, maxTurns, controller);
+  const turnCounter = { value: 0 };
+  const promise = executeAgent(prompt, agentName, modelTier, mcpServers, maxTurns, controller, turnCounter);
   return {
     promise,
     abort: () => {
       console.log(`  [abort] ${agentName} -- killing SDK process via AbortController`);
       controller.abort();
     },
+    getTurns: () => turnCounter.value,
   };
 }

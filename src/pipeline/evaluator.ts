@@ -6,11 +6,19 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { AttackGraphService } from '../services/attack-graph.js';
 import { CredentialStore } from '../services/credential-store.js';
+import {
+  ACCESS_LEVEL_RANK,
+} from '../types/index.js';
 import type {
   AgentRoundResult,
   AttackGraph,
   GraphDelta,
 } from '../types/index.js';
+
+// v3.6.0 BUG-NEW-4/7: Only allow access level upgrades, never downgrades
+function isAccessUpgrade(current: string, proposed: string): boolean {
+  return (ACCESS_LEVEL_RANK[proposed] ?? 0) > (ACCESS_LEVEL_RANK[current] ?? 0);
+}
 
 interface AttackLogEntry {
   timestamp: string;
@@ -80,6 +88,18 @@ export class Evaluator {
       result.success ? 'succeeded' : 'failed',
       result.result_summary.substring(0, 200),
     );
+
+    // v3.6.0 BUG-NEW-9: Deduplicate access_levels_changed by IP, keep highest-level change
+    if (delta.access_levels_changed.length > 1) {
+      const best = new Map<string, { ip: string; from: string; to: string }>();
+      for (const change of delta.access_levels_changed) {
+        const existing = best.get(change.ip);
+        if (!existing || (ACCESS_LEVEL_RANK[change.to] ?? 0) > (ACCESS_LEVEL_RANK[existing.to] ?? 0)) {
+          best.set(change.ip, change);
+        }
+      }
+      delta.access_levels_changed = Array.from(best.values());
+    }
 
     return delta;
   }
@@ -159,25 +179,28 @@ export class Evaluator {
               (detailsLower.includes('system') && (detailsLower.includes('webshell') || detailsLower.includes('rce')))) {
             const node = graph.queryNode(ip);
             const prev = node?.access_level ?? 'none';
-            if (prev !== 'system') {
+            if (isAccessUpgrade(prev, 'system')) {
               graph.updateNode(ip, { access_level: 'system' });
               delta.access_levels_changed.push({ ip, from: prev, to: 'system' });
             }
           }
         }
-        // If this was a lateral move, record edge
+        // v3.6.0 BUG-NEW-4/7: Monotonic access level updates for lateral and privesc
         if (attack.phase === 'lateral' || attack.technique.startsWith('T1021')) {
-          // We don't know the source IP from the attack log alone,
-          // but mark the target as reachable
-          graph.updateNode(ip, { access_level: 'user' });
-          delta.access_levels_changed.push({ ip, from: 'none', to: 'user' });
+          const node = graph.queryNode(ip);
+          const currentLevel = node?.access_level ?? 'none';
+          if (isAccessUpgrade(currentLevel, 'user')) {
+            graph.updateNode(ip, { access_level: 'user' });
+            delta.access_levels_changed.push({ ip, from: currentLevel, to: 'user' });
+          }
         }
-        // Privesc success
         if (attack.phase === 'privesc' || attack.technique.startsWith('T1068')) {
           const node = graph.queryNode(ip);
-          const prev = node?.access_level ?? 'none';
-          graph.updateNode(ip, { access_level: 'admin' });
-          delta.access_levels_changed.push({ ip, from: prev, to: 'admin' });
+          const currentLevel = node?.access_level ?? 'none';
+          if (isAccessUpgrade(currentLevel, 'admin')) {
+            graph.updateNode(ip, { access_level: 'admin' });
+            delta.access_levels_changed.push({ ip, from: currentLevel, to: 'admin' });
+          }
         }
         break;
 

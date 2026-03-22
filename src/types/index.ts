@@ -18,6 +18,46 @@ export type AttackResult = 'success' | 'failed' | 'blocked' | 'skipped';
 
 export type EngagementType = 'external' | 'internal' | 'assumed-breach';
 
+// v3.6.0: Monotonic access level ordering (BUG-NEW-4/7)
+export const ACCESS_LEVEL_RANK: Record<string, number> = {
+  'none': 0,
+  'user': 1,
+  'admin': 2,
+  'system': 3,
+};
+
+// v3.6.0: Canonical ATT&CK technique labels (BUG-NEW-13)
+export const ATTACK_TECHNIQUE_LABELS: Record<string, string> = {
+  'T1021': 'Remote Services',
+  'T1021.001': 'Remote Desktop Protocol',
+  'T1021.002': 'SMB/Windows Admin Shares',
+  'T1021.003': 'DCOM',
+  'T1021.004': 'SSH',
+  'T1021.006': 'Windows Remote Management',
+  'T1003': 'OS Credential Dumping',
+  'T1003.001': 'LSASS Memory',
+  'T1003.002': 'Security Account Manager',
+  'T1003.003': 'NTDS',
+  'T1046': 'Network Service Discovery',
+  'T1059': 'Command and Scripting Interpreter',
+  'T1059.001': 'PowerShell',
+  'T1059.003': 'Windows Command Shell',
+  'T1059.004': 'Unix Shell',
+  'T1068': 'Exploitation for Privilege Escalation',
+  'T1078': 'Valid Accounts',
+  'T1110': 'Brute Force',
+  'T1110.001': 'Password Guessing',
+  'T1110.002': 'Password Cracking',
+  'T1187': 'Forced Authentication',
+  'T1190': 'Exploit Public-Facing Application',
+  'T1557': 'Adversary-in-the-Middle',
+  'T1558': 'Steal or Forge Kerberos Tickets',
+  'T1558.003': 'Kerberoasting',
+  'T1558.004': 'AS-REP Roasting',
+  'T1572': 'Protocol Tunneling',
+  'T1574': 'Hijack Execution Flow',
+};
+
 export type CredentialScope = 'web' | 'domain' | 'local' | 'unknown';
 
 export type CredentialSource =
@@ -229,6 +269,7 @@ export interface AgentRoundResult {
   refused?: boolean;
   no_findings?: boolean;
   partial_timeout?: boolean;
+  heartbeat_stalled?: boolean;  // v3.6.0 BUG-NEW-6: killed by heartbeat (0 turns after grace period)
 }
 export interface GraphDelta {
   nodes_added: string[];

@@ -6,6 +6,7 @@ import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { runAgent } from '../ai/claude-executor.js';
 import { loadPrompt } from '../services/prompt-manager.js';
+import { ATTACK_TECHNIQUE_LABELS } from '../types/index.js';
 import type {
   AttackGraph,
   ReportOutline,
@@ -34,7 +35,9 @@ export class ReportGenerator {
     rounds: RoundResult[],
     logDir: string,
   ): PreCollectedEvidence {
-    const nodes = Object.values(graph.nodes);
+    const allNodes = Object.values(graph.nodes);
+    // v3.6.0 BUG-NEW-12: Filter out subnet entries from host count
+    const nodes = allNodes.filter(n => !n.ip.includes('/'));
 
     // Graph summary
     const graphLines = [
@@ -103,9 +106,13 @@ export class ReportGenerator {
         if (a.result === 'blocked') byTechnique[t].blocked++;
         if (a.result === 'failed') byTechnique[t].failed++;
       }
+      // v3.6.0 BUG-NEW-13: Use canonical ATT&CK technique labels
       detectionSummary = `Total attacks: ${attacks.length}\n` +
         Object.entries(byTechnique)
-          .map(([t, s]) => `${t}: ${s.total} attempts, ${s.success} success, ${s.blocked} blocked, ${s.failed} failed`)
+          .map(([t, s]) => {
+            const label = ATTACK_TECHNIQUE_LABELS[t] ?? t;
+            return `${t} (${label}): ${s.total} attempts, ${s.success} success, ${s.blocked} blocked, ${s.failed} failed`;
+          })
           .join('\n');
     }
 

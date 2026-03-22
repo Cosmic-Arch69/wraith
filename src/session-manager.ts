@@ -140,20 +140,20 @@ export interface AgentTemplate {
   requiresPlaywright: boolean;
 }
 
-// v3.5.0: Timeouts are safety nets, not bottlenecks. Agents should complete via turn budget.
+// v3.6.0: +50% turn budgets, increased timeouts. Agents should complete via turn budget.
 // Rate limiting can stall agents for minutes without using turns -- timeouts must account for this.
 // Reasoning: with subscription auth, there's no per-call cost. Let agents finish their work.
 export const AGENT_TEMPLATE_LIBRARY: Record<string, AgentTemplate> = {
-  'recon':       { promptFile: 'recon',       defaultTier: 'medium', defaultTimeout: 1800, defaultTurnBudget: 150, requiresPlaywright: false },
-  'osint-recon': { promptFile: 'osint-recon', defaultTier: 'medium', defaultTimeout: 1800, defaultTurnBudget: 100, requiresPlaywright: false },
-  'sqli':        { promptFile: 'sqli',        defaultTier: 'medium', defaultTimeout: 1200, defaultTurnBudget: 100, requiresPlaywright: false },
-  'cmdi':        { promptFile: 'cmdi',        defaultTier: 'medium', defaultTimeout: 1200, defaultTurnBudget: 100, requiresPlaywright: false },
-  'auth-attack': { promptFile: 'auth-attack', defaultTier: 'medium', defaultTimeout: 1200, defaultTurnBudget: 100, requiresPlaywright: true },
-  'kerberoast':  { promptFile: 'kerberoast',  defaultTier: 'medium', defaultTimeout: 1200, defaultTurnBudget: 150, requiresPlaywright: false },
-  'bruteforce':  { promptFile: 'bruteforce',  defaultTier: 'medium', defaultTimeout: 1200, defaultTurnBudget: 120, requiresPlaywright: false },
-  'lateral':     { promptFile: 'lateral',     defaultTier: 'medium', defaultTimeout: 1800, defaultTurnBudget: 200, requiresPlaywright: false },
-  'privesc':     { promptFile: 'privesc',     defaultTier: 'large',  defaultTimeout: 1800, defaultTurnBudget: 250, requiresPlaywright: false },
-  'report':      { promptFile: 'report',      defaultTier: 'small',  defaultTimeout: 900,  defaultTurnBudget: 100, requiresPlaywright: false },
-  'nuclei':      { promptFile: 'nuclei',      defaultTier: 'small',  defaultTimeout: 600,  defaultTurnBudget: 50,  requiresPlaywright: false },
-  'pivot':       { promptFile: 'pivot',       defaultTier: 'medium', defaultTimeout: 1200, defaultTurnBudget: 100, requiresPlaywright: false },
+  'recon':       { promptFile: 'recon',       defaultTier: 'medium', defaultTimeout: 2400, defaultTurnBudget: 225, requiresPlaywright: false },
+  'osint-recon': { promptFile: 'osint-recon', defaultTier: 'medium', defaultTimeout: 2400, defaultTurnBudget: 150, requiresPlaywright: false },
+  'sqli':        { promptFile: 'sqli',        defaultTier: 'medium', defaultTimeout: 1800, defaultTurnBudget: 150, requiresPlaywright: false },
+  'cmdi':        { promptFile: 'cmdi',        defaultTier: 'medium', defaultTimeout: 1800, defaultTurnBudget: 150, requiresPlaywright: false },
+  'auth-attack': { promptFile: 'auth-attack', defaultTier: 'medium', defaultTimeout: 1800, defaultTurnBudget: 150, requiresPlaywright: true },
+  'kerberoast':  { promptFile: 'kerberoast',  defaultTier: 'medium', defaultTimeout: 1800, defaultTurnBudget: 225, requiresPlaywright: false },
+  'bruteforce':  { promptFile: 'bruteforce',  defaultTier: 'medium', defaultTimeout: 1800, defaultTurnBudget: 180, requiresPlaywright: false },
+  'lateral':     { promptFile: 'lateral',     defaultTier: 'medium', defaultTimeout: 2400, defaultTurnBudget: 300, requiresPlaywright: false },
+  'privesc':     { promptFile: 'privesc',     defaultTier: 'large',  defaultTimeout: 2700, defaultTurnBudget: 375, requiresPlaywright: false },
+  'report':      { promptFile: 'report',      defaultTier: 'small',  defaultTimeout: 1200, defaultTurnBudget: 150, requiresPlaywright: false },
+  'nuclei':      { promptFile: 'nuclei',      defaultTier: 'small',  defaultTimeout: 900,  defaultTurnBudget: 75,  requiresPlaywright: false },
+  'pivot':       { promptFile: 'pivot',       defaultTier: 'medium', defaultTimeout: 1800, defaultTurnBudget: 150, requiresPlaywright: false },
 };

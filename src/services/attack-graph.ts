@@ -3,6 +3,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { ACCESS_LEVEL_RANK } from '../types/index.js';
 import type { AttackGraph, AttackGraphNode, EngagementType } from '../types/index.js';
 
 const RESPONSE_TIME_WINDOW = 5;
@@ -64,7 +65,15 @@ export class AttackGraphService {
     // Merge scalar fields
     if (updates.host !== undefined) existing.host = updates.host;
     if (updates.status !== undefined) existing.status = updates.status;
-    if (updates.access_level !== undefined) existing.access_level = updates.access_level;
+    // v3.6.0 BUG-NEW-4/7: Monotonic access level guard -- never downgrade
+    if (updates.access_level !== undefined) {
+      const currentRank = ACCESS_LEVEL_RANK[existing.access_level] ?? 0;
+      const proposedRank = ACCESS_LEVEL_RANK[updates.access_level] ?? 0;
+      if (proposedRank > currentRank) {
+        existing.access_level = updates.access_level;
+      }
+      // else: silently skip downgrade
+    }
     if (updates.pivot_from !== undefined) existing.pivot_from = updates.pivot_from;
     if (updates.dvwa_available !== undefined) existing.dvwa_available = updates.dvwa_available;
 

@@ -6,7 +6,7 @@ import { readFileSync, mkdirSync, writeFileSync, existsSync, appendFileSync, rea
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import yaml from 'js-yaml';
-import { startAgent } from '../ai/claude-executor.js';
+import { startAgent, type ExecutorResult } from '../ai/claude-executor.js';
 import { loadPromptWithProfile } from '../services/prompt-manager.js';
 import { processManager } from '../services/process-manager.js';
 import { PotWatcher } from '../services/pot-watcher.js';
@@ -213,12 +213,13 @@ async function spawnAgent(
 
   // BUG-32: Enforce minimum timeouts -- agents should finish via turn budget, not timeout
   // The planner often sets aggressive timeouts (90-120s) that kill agents before they start
+  // v3.6.0: Updated minimum timeouts to match new budget increases
   const MIN_TIMEOUTS: Record<string, number> = {
-    recon: 1800, 'osint-recon': 1800,
-    lateral: 1200, privesc: 1200, pivot: 1200,
-    kerberoast: 900, bruteforce: 900,
-    sqli: 900, cmdi: 900, 'auth-attack': 900,
-    nuclei: 600,
+    recon: 2400, 'osint-recon': 2400,
+    lateral: 1800, privesc: 2400, pivot: 1800,
+    kerberoast: 1500, bruteforce: 1500,
+    sqli: 1200, cmdi: 1200, 'auth-attack': 1200,
+    nuclei: 900,
   };
   const minTimeout = MIN_TIMEOUTS[profile.prompt_template];
   if (minTimeout && profile.timeout_sec < minTimeout) {
@@ -226,11 +227,7 @@ async function spawnAgent(
     profile.timeout_sec = minTimeout;
   }
 
-  // Wall-clock timeout with cancellation (BUG-7 fix)
-  const timeoutPromise = new Promise<null>(resolve =>
-    setTimeout(() => resolve(null), profile.timeout_sec * 1000),
-  );
-
+  // v3.6.0 BUG-NEW-6: Heartbeat-aware timeout with cancellation
   const handle = startAgent(
     fullPrompt,
     agentId,
@@ -239,13 +236,46 @@ async function spawnAgent(
     profile.turn_budget,
   );
 
-  const result = await Promise.race([handle.promise, timeoutPromise]);
+  const HEARTBEAT_INTERVAL_MS = 30_000;
+  const HEARTBEAT_GRACE_MS = 120_000;
+  const wallTimeoutMs = profile.timeout_sec * 1000;
+  let heartbeatKilled = false;
+
+  const result = await new Promise<ExecutorResult | null>((resolve) => {
+    const agentStart = Date.now();
+    let resolved = false;
+
+    const wallTimer = setTimeout(() => {
+      if (!resolved) { resolved = true; handle.abort(); resolve(null); }
+    }, wallTimeoutMs);
+
+    const heartbeatTimer = setInterval(() => {
+      if (resolved) { clearInterval(heartbeatTimer); return; }
+      const elapsed = Date.now() - agentStart;
+      if (elapsed > HEARTBEAT_GRACE_MS && handle.getTurns() === 0) {
+        console.log(`  [heartbeat-kill] ${agentId}: 0 turns after ${Math.round(elapsed / 1000)}s -- killing`);
+        heartbeatKilled = true;
+        resolved = true;
+        clearTimeout(wallTimer);
+        clearInterval(heartbeatTimer);
+        handle.abort();
+        resolve(null);
+      }
+    }, HEARTBEAT_INTERVAL_MS);
+
+    handle.promise.then(r => {
+      if (!resolved) { resolved = true; clearTimeout(wallTimer); clearInterval(heartbeatTimer); resolve(r); }
+    }).catch(() => {
+      if (!resolved) { resolved = true; clearTimeout(wallTimer); clearInterval(heartbeatTimer); resolve(null); }
+    });
+  });
   const duration = Date.now() - start;
 
   if (result === null) {
-    // Timeout -- kill the SDK process
-    handle.abort();
-    console.log(`  [timeout] ${agentId} killed after ${profile.timeout_sec}s`);
+    // Timeout or heartbeat kill -- SDK process already aborted
+    if (!heartbeatKilled) {
+      console.log(`  [timeout] ${agentId} killed after ${profile.timeout_sec}s`);
+    }
 
     // BUG-45: Harvest achievements from attacks.jsonl before declaring timeout
     const attackLog = join(logDir, 'attacks.jsonl');
@@ -309,15 +339,18 @@ async function spawnAgent(
       agent_id: agentId,
       success: hasAchievements,
       result_summary: hasAchievements
-        ? `PARTIAL (timed out after ${profile.timeout_sec}s but achieved: ${harvestedSuccesses.join(', ')})`
-        : `TIMEOUT after ${profile.timeout_sec}s`,
+        ? `PARTIAL (timed out after ${Math.round(duration / 1000)}s but achieved: ${harvestedSuccesses.join(', ')})`
+        : heartbeatKilled
+          ? `HEARTBEAT_KILL after ${Math.round(duration / 1000)}s (0 turns)`
+          : `TIMEOUT after ${profile.timeout_sec}s`,
       duration_ms: duration,
-      turns_used: 0,
+      turns_used: handle.getTurns(),  // v3.6.0 BUG-NEW-8: real turn count instead of hardcoded 0
       evidence_files: timeoutEvidence,
-      credentials_found: 0,
+      credentials_found: 0,  // will be updated below if we add credential delta tracking for timeouts
       vectors_opened: [],
       vectors_blocked: hasAchievements ? [] : [profile.technique_name],
       partial_timeout: true,
+      heartbeat_stalled: heartbeatKilled || undefined,  // v3.6.0 BUG-NEW-6
     };
   }
 
@@ -331,7 +364,35 @@ async function spawnAgent(
     if (existsSync(join(logDir, f))) evidenceFiles.push(f);
   }
 
-  // BUG-51: Save agent output to disk for ALL agents (not just those with output)
+  // v3.6.0 BUG-NEW-3: If output is null, synthesize from attacks.jsonl
+  let outputText = result.result;
+  if (!outputText || outputText === '(no output)') {
+    const attackLog = join(logDir, 'attacks.jsonl');
+    if (existsSync(attackLog)) {
+      try {
+        const allLines = readFileSync(attackLog, 'utf-8').trim().split('\n');
+        const agentLines = allLines.filter(l => {
+          try {
+            const ev = JSON.parse(l);
+            return String(ev.phase ?? '').includes(profile.prompt_template) ||
+                   String(ev.details ?? '').includes(profile.prompt_template);
+          } catch { return false; }
+        });
+        if (agentLines.length > 0) {
+          outputText = `[Synthesized from ${agentLines.length} attack log entries]\n` +
+            agentLines.slice(-10).map(l => {
+              try {
+                const ev = JSON.parse(l);
+                return `${ev.technique}: ${ev.result} -- ${String(ev.details ?? '').substring(0, 100)}`;
+              } catch { return l; }
+            }).join('\n');
+          console.log(`  [output-synth] ${agentId}: synthesized output from ${agentLines.length} attack log entries`);
+        }
+      } catch { /* skip */ }
+    }
+  }
+
+  // BUG-51: Save agent output to disk for ALL agents
   try {
     writeFileSync(join(logDir, `agent-${agentId}-output.md`), [
       `# Agent: ${agentId}`,
@@ -342,11 +403,11 @@ async function spawnAgent(
       `Duration: ${duration}ms`,
       ``,
       `## Output`,
-      result.result ?? '(no output)',
+      outputText ?? '(no output)',
     ].join('\n'));
   } catch { /* non-critical */ }
 
-  // BUG-38: Detect refusal essays (agent said no instead of using tools)
+  // v3.6.0 BUG-NEW-1: Expanded refusal detection
   const REFUSAL_PATTERNS = [
     "I'm not going to",
     "I'm declining",
@@ -360,29 +421,99 @@ async function spawnAgent(
     "I need to stop here",
     "I'm not going to execute",
     "outside the scope of what I",
+    // v3.6.0: Additional refusal patterns from RUN-12 analysis
+    "respectfully decline",
+    "What I Can Help With Instead",
+    "cannot assist with",
+    "I'm unable to",
+    "I must decline",
+    "not comfortable",
+    "I should not",
+    "I will not",
+    "against my guidelines",
+    "ethical concerns",
+    "I appreciate the scenario, but",
+    "Instead, I can",
+    "Here's what I can help with",
   ];
   let refused = false;
-  if (result.result && (result.turns ?? 0) > 0) {
-    refused = REFUSAL_PATTERNS.some(p => result.result!.includes(p));
+  // v3.6.0 BUG-NEW-1: Remove turns > 0 guard -- check refusal regardless of turn count
+  if (outputText) {
+    refused = REFUSAL_PATTERNS.some(p => outputText!.includes(p));
   }
 
-  // BUG-43: Check for evidence -- "success" with no output is no_findings
+  // v3.6.0 BUG-NEW-1: Heuristic -- fast completion + few turns + no evidence + no attacks = likely refusal
+  if (!refused && duration < 30_000 && (result.turns ?? 0) < 10 && evidenceFiles.length === 0) {
+    const attackLog = join(logDir, 'attacks.jsonl');
+    let agentAttacks = 0;
+    if (existsSync(attackLog)) {
+      try {
+        const lines = readFileSync(attackLog, 'utf-8').trim().split('\n');
+        for (const line of lines) {
+          try {
+            const event = JSON.parse(line);
+            if (String(event.phase ?? '').includes(profile.prompt_template) ||
+                String(event.details ?? '').toLowerCase().includes(profile.prompt_template)) {
+              agentAttacks++;
+            }
+          } catch { /* skip */ }
+        }
+      } catch { /* skip */ }
+    }
+    if (agentAttacks === 0) {
+      console.log(`  [heuristic-refusal] ${agentId}: <30s, <10 turns, 0 attacks -- marking as refused`);
+      refused = true;
+    }
+  }
+
+  // v3.6.0 BUG-NEW-2: Cross-reference attacks.jsonl for actual action before declaring evidence
+  let hasActions = false;
+  {
+    const attackLog = join(logDir, 'attacks.jsonl');
+    if (existsSync(attackLog)) {
+      try {
+        const lines = readFileSync(attackLog, 'utf-8').trim().split('\n');
+        for (const line of lines) {
+          try {
+            const event = JSON.parse(line);
+            if ((String(event.phase ?? '') === profile.prompt_template ||
+                 String(event.details ?? '').toLowerCase().includes(profile.prompt_template)) &&
+                event.result !== 'skipped') {
+              hasActions = true;
+              break;
+            }
+          } catch { /* skip */ }
+        }
+      } catch { /* skip */ }
+    }
+  }
+
   const hasEvidence = evidenceFiles.length > 0 ||
-    (result.result && result.result.length > 50 && result.result !== '(no output)');
+    (hasActions && outputText && outputText.length > 50 && outputText !== '(no output)');
   const noFindings = !refused && result.success && !hasEvidence;
 
   const effectiveSuccess = refused ? false : (noFindings ? false : result.success);
   const label = refused ? 'REFUSED' : noFindings ? 'NO_FINDINGS' : effectiveSuccess ? 'SUCCESS' : 'FAILED';
   console.log(`  [done] ${agentId}: ${label} (${result.turns ?? 0} turns, ${duration}ms)`);
 
+  // v3.6.0 BUG-NEW-5: Compute credential delta by re-reading credentials.json from disk
+  let credentialsFound = 0;
+  try {
+    const credsPath = join(logDir, 'credentials.json');
+    if (existsSync(credsPath)) {
+      const freshCreds = JSON.parse(readFileSync(credsPath, 'utf-8'));
+      credentialsFound = Array.isArray(freshCreds) ? freshCreds.length : 0;
+    }
+  } catch { /* skip */ }
+
   return {
     agent_id: agentId,
     success: effectiveSuccess,
-    result_summary: result.result?.substring(0, 2000) ?? 'No output',
+    result_summary: (outputText ?? 'No output').substring(0, 2000),
     duration_ms: duration,
     turns_used: result.turns ?? 0,
     evidence_files: evidenceFiles,
-    credentials_found: 0,
+    credentials_found: credentialsFound,
     vectors_opened: [],
     vectors_blocked: effectiveSuccess ? [] : [profile.technique_name],
     refused,
@@ -398,12 +529,12 @@ export async function runPipeline(configPath: string): Promise<void> {
   mkdirSync(join(logDir, 'memory'), { recursive: true });
 
   const planning = config.planning ?? {
-    max_rounds: 10,
-    max_total_agents: 30,
-    max_concurrent_agents: 3,
+    max_rounds: 15,
+    max_total_agents: 50,
+    max_concurrent_agents: 5,
   };
 
-  console.log(`\n  Wraith v3.3.0 -- Adaptive Pipeline`);
+  console.log(`\n  Wraith v3.6.0 -- Adaptive Pipeline`);
   console.log(`  Target: ${config.target.domain} (${config.target.dc})`);
   console.log(`  Hosts:  ${config.target.hosts.map(h => h.ip).join(', ')}`);
   console.log(`  Budget: ${planning.max_rounds} rounds, ${planning.max_total_agents} agents, ${planning.max_concurrent_agents} concurrent`);
@@ -482,8 +613,8 @@ export async function runPipeline(configPath: string): Promise<void> {
     target_ip: config.target.dc || config.target.hosts[0]?.ip || '',  // BUG-3 fix: fallback to first host in external mode
     prompt_template: 'recon',
     model_tier: 'medium',
-    turn_budget: 100,
-    timeout_sec: 900,
+    turn_budget: 225,    // v3.6.0: increased from 100
+    timeout_sec: 2400,   // v3.6.0: increased from 900
     priority: 10,
     stealth_level: 'loud',
     depends_on: [],

@@ -31,9 +31,9 @@ output:
   report: true
 
 planning:
-  max_rounds: 10
-  max_total_agents: 30
-  max_concurrent_agents: 3
+  max_rounds: 15
+  max_total_agents: 50
+  max_concurrent_agents: 5
   objective: "full_assessment"
   stealth_mode: true
 

@@ -201,7 +201,13 @@ export class AttackGraphService {
     }
     const node = this.graph.nodes[ip];
     if (node) {
-      node.status = 'blocked';
+      // v3.7.0 BUG-22: Set soar_status separately -- don't overwrite operational status
+      // if host is already compromised (access_level > none)
+      node.soar_status = 'blocked';
+      if (node.access_level === 'none') {
+        node.status = 'blocked';
+      }
+      // If host is compromised, keep status as 'up' -- it's reachable via pivot
     }
     this.persist();
   }

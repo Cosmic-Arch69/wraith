@@ -2,17 +2,57 @@
 // v3.3.0: Evidence pre-collected and injected into prompt (no runtime tool calls)
 // Adapted from MiroFish report_agent.py pattern + PentestAgent CSV-first pattern
 
-import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runAgent } from '../ai/claude-executor.js';
 import { loadPrompt } from '../services/prompt-manager.js';
 import { ATTACK_TECHNIQUE_LABELS } from '../types/index.js';
 import type {
   AttackGraph,
+  FindingSeverity,
   ReportOutline,
   RoundResult,
   WraithV3Config,
 } from '../types/index.js';
+
+// v3.7.0: Severity scoring for findings
+function scoreFinding(technique: string, accessLevel: string): FindingSeverity {
+  // Critical: domain compromise, credential dumping, golden ticket
+  if (['T1003.006', 'T1003.001', 'T1003.003', 'T1558.001'].includes(technique)) return 'Critical';
+  if (accessLevel === 'system') return 'Critical';
+  // High: lateral movement, privilege escalation
+  if (technique.startsWith('T1021') || technique === 'T1068' || technique === 'T1550.002') return 'High';
+  if (accessLevel === 'admin') return 'High';
+  // Medium: web exploitation, credential attacks
+  if (['T1190', 'T1059', 'T1110', 'T1558.003', 'T1558.004', 'T1187'].includes(technique)) return 'Medium';
+  if (technique.startsWith('T1059')) return 'Medium';
+  // Low: recon, enumeration
+  if (['T1046', 'T1078'].includes(technique)) return 'Low';
+  return 'Informational';
+}
+
+// v3.7.0: Remediation guidance per technique
+const REMEDIATION_MAP: Record<string, string> = {
+  'T1003.006': 'Restrict DCSync permissions to only required accounts. Enable Protected Users group for privileged accounts. Monitor for Directory Service Replication requests from non-DC sources.',
+  'T1003.001': 'Enable Credential Guard on Windows 10+. Restrict debug privileges. Monitor for LSASS process access.',
+  'T1003.002': 'Restrict local admin access. Use LAPS for unique local admin passwords. Monitor SAM hive access.',
+  'T1003.003': 'Restrict ntdsutil access. Monitor for Volume Shadow Copy creation on DCs.',
+  'T1021.002': 'Disable SMB v1. Require SMB signing. Restrict admin shares. Monitor for lateral SMB authentication.',
+  'T1021.006': 'Restrict WinRM access via GPO. Use JEA (Just Enough Administration). Monitor WinRM connections.',
+  'T1046': 'Segment networks. Configure host-based firewalls. Monitor for port scanning activity.',
+  'T1059.001': 'Enable PowerShell Script Block Logging. Use Constrained Language Mode. Monitor for encoded commands.',
+  'T1059.003': 'Enable command-line process auditing. Restrict cmd.exe access via AppLocker.',
+  'T1068': 'Patch systems promptly. Reduce attack surface by removing unnecessary services.',
+  'T1078': 'Implement MFA. Monitor for credential stuffing. Use conditional access policies.',
+  'T1110': 'Enforce account lockout policies. Implement MFA. Monitor for brute-force patterns.',
+  'T1187': 'Disable LLMNR and NBT-NS. Enable SMB signing. Use network segmentation.',
+  'T1190': 'Patch web applications. Implement WAF rules. Use parameterized queries for SQL. Input validation.',
+  'T1550.002': 'Enable Credential Guard. Restrict NTLM authentication via GPO. Monitor for Pass-the-Hash indicators.',
+  'T1557': 'Disable LLMNR/NBT-NS/MDNS. Enable SMB signing. Use 802.1X network authentication.',
+  'T1558.001': 'Reset krbtgt password twice. Monitor for golden ticket indicators (TGT lifetime anomalies).',
+  'T1558.003': 'Use Group Managed Service Accounts (gMSA). Set long, random SPN passwords. Monitor for TGS requests.',
+  'T1558.004': 'Require Kerberos pre-authentication for all accounts. Monitor for AS-REP requests.',
+};
 
 // v3.3.0: Pre-collected evidence structure (replaces runtime tool calls)
 export interface PreCollectedEvidence {
@@ -106,14 +146,51 @@ export class ReportGenerator {
         if (a.result === 'blocked') byTechnique[t].blocked++;
         if (a.result === 'failed') byTechnique[t].failed++;
       }
+      // v3.7.0 BUG-19: Separate attempted/skipped/pending metrics
+      const skipped = attacks.filter((a: Record<string, unknown>) => a.result === 'skipped').length;
+      const pending = attacks.filter((a: Record<string, unknown>) => a.result === 'pending').length;
+      const attempted = attacks.length - skipped - pending;
+      const succeeded = attacks.filter((a: Record<string, unknown>) => a.result === 'success').length;
+      const blocked = attacks.filter((a: Record<string, unknown>) => a.result === 'blocked').length;
+      const failed = attacks.filter((a: Record<string, unknown>) => a.result === 'failed').length;
+
       // v3.6.0 BUG-NEW-13: Use canonical ATT&CK technique labels
-      detectionSummary = `Total attacks: ${attacks.length}\n` +
-        Object.entries(byTechnique)
+      // v3.7.0: Add severity scoring and remediation per technique
+      detectionSummary = [
+        `Total events: ${attacks.length} | Attempted: ${attempted} | Skipped: ${skipped}`,
+        `Succeeded: ${succeeded} | Failed: ${failed} | Blocked: ${blocked}`,
+        `Success rate (attempted only): ${attempted > 0 ? ((succeeded / attempted) * 100).toFixed(1) : 0}%`,
+        `SOAR detection rate: ${attempted > 0 ? ((blocked / attempted) * 100).toFixed(1) : 0}%`,
+        '',
+        ...Object.entries(byTechnique)
           .map(([t, s]) => {
             const label = ATTACK_TECHNIQUE_LABELS[t] ?? t;
-            return `${t} (${label}): ${s.total} attempts, ${s.success} success, ${s.blocked} blocked, ${s.failed} failed`;
-          })
-          .join('\n');
+            const severity = scoreFinding(t, '');
+            const remediation = REMEDIATION_MAP[t] ?? 'Review and apply vendor security patches.';
+            return `${t} (${label}) [${severity}]: ${s.total} attempts, ${s.success} success, ${s.blocked} blocked\n  Remediation: ${remediation}`;
+          }),
+      ].join('\n');
+
+      // v3.7.0: Export MITRE heatmap JSON for Console
+      const heatmapData = {
+        generated_at: new Date().toISOString(),
+        total_events: attacks.length,
+        attempted,
+        skipped,
+        techniques: Object.entries(byTechnique).map(([t, s]) => ({
+          id: t,
+          name: ATTACK_TECHNIQUE_LABELS[t] ?? t,
+          attempts: s.total,
+          successes: s.success,
+          blocks: s.blocked,
+          failures: s.failed,
+          severity: scoreFinding(t, ''),
+          remediation: REMEDIATION_MAP[t] ?? 'Review and apply vendor security patches.',
+        })),
+      };
+      try {
+        writeFileSync(join(logDir, 'mitre-heatmap.json'), JSON.stringify(heatmapData, null, 2));
+      } catch { /* non-critical */ }
     }
 
     // Round summaries -- BUG-47: sanitize refusal text from agent summaries

@@ -6,9 +6,16 @@
 
 engagement:
   type: external
-  wan_ip: "10.0.0.183"
+  wan_ip: "10.0.0.183"  # TODO v3.7.0: update to 192.168.200.1 after Kali dual-NIC setup (see docs/network-topology.md)
   network_interface: "eth0"  # B6: not used in external mode (Responder disabled), but kept for consistency
   name: "YASHnet External Assessment"
+  authorization:
+    tester_name: "Jaswanth Reddy Gorantla"
+    tester_role: "graduate cybersecurity student"
+    infrastructure: "Proxmox homelab on Dell PowerEdge (10.0.0.31)"
+    environment: "Isolated VLANs -- no internet-facing production systems"
+    purpose: "Security education, SOAR validation, detection engineering coursework"
+    monitoring: "Wazuh SIEM actively monitoring all activity for defensive analysis"
 
 target:
   domain: "YASHnet.local"

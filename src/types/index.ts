@@ -38,6 +38,7 @@ export const ATTACK_TECHNIQUE_LABELS: Record<string, string> = {
   'T1003.001': 'LSASS Memory',
   'T1003.002': 'Security Account Manager',
   'T1003.003': 'NTDS',
+  'T1003.006': 'DCSync',
   'T1046': 'Network Service Discovery',
   'T1059': 'Command and Scripting Interpreter',
   'T1059.001': 'PowerShell',
@@ -100,6 +101,7 @@ export interface AttackGraphNode {
   response_times: number[];          // last N response times in ms (0 = timeout)
   last_seen: string;                 // ISO-8601
   notes: string[];                   // arbitrary findings
+  soar_status?: 'clear' | 'blocked';  // v3.7.0 BUG-22: separate from operational status
 }
 
 // v2.1: Live attack graph shared across all agents
@@ -147,12 +149,39 @@ export interface AttackEvent {
   details: string;
 }
 
+// v3.7.0: Authorization metadata for config-driven auth headers
+export interface EngagementAuthorization {
+  tester_name: string;
+  tester_role: string;
+  organization?: string;
+  infrastructure: string;
+  environment: string;
+  purpose: string;
+  monitoring?: string;
+}
+
+// v3.7.0: Severity scoring for findings
+export type FindingSeverity = 'Critical' | 'High' | 'Medium' | 'Low' | 'Informational';
+
+export interface Finding {
+  id: string;
+  title: string;
+  severity: FindingSeverity;
+  technique: string;
+  techniqueName: string;
+  targetIp: string;
+  evidence: string;
+  remediation: string;
+  cvss?: number;
+}
+
 export interface WraithConfig {
   engagement?: {
     type: EngagementType;
     wan_ip?: string;                 // for external mode: pfSense WAN IP
     network_interface?: string;      // B6: network interface for Responder (default: 'eth0')
     name?: string;
+    authorization?: EngagementAuthorization;  // v3.7.0: config-driven auth
   };
   target: {
     domain: string;

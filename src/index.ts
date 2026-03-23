@@ -76,7 +76,7 @@ async function main() {
         console.log(`\n  Wraith v3.0.0 (legacy mode)`);
         await runWorkflow(cli.config);
       } else {
-        await runPipeline(cli.config);
+        await runPipeline(cli.config, cli.skipPreflight);
       }
       break;
     }

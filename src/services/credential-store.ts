@@ -31,18 +31,28 @@ export class CredentialStore {
 
   add(cred: Omit<Credential, 'id' | 'discovered_at'>): Credential {
     const id = makeId(cred.username, cred.password, cred.hash);
-    const existing = this.creds.get(id);
+
+    // v3.7.0 BUG-20: Check for existing entry with same username (different password/hash variant)
+    const existingByUsername = this.findByUsername(cred.username, cred.scope);
+    const existing = this.creds.get(id) ?? existingByUsername;
 
     if (existing) {
-      // Merge hosts and protocols
+      // Merge: combine password + hash + hosts + protocols into one entry
       const merged: Credential = {
         ...existing,
+        password: existing.password ?? cred.password,
+        hash: existing.hash ?? cred.hash,
         hosts_valid: Array.from(new Set([...existing.hosts_valid, ...cred.hosts_valid])),
         hosts_failed: Array.from(new Set([...existing.hosts_failed, ...cred.hosts_failed])),
         protocol_valid: Array.from(new Set([...existing.protocol_valid, ...cred.protocol_valid])),
         protocol_failed: Array.from(new Set([...existing.protocol_failed, ...cred.protocol_failed])),
       };
-      this.creds.set(id, merged);
+      // If merged into a username-matched entry (different id), remove old id entry
+      if (existingByUsername && !this.creds.has(id)) {
+        this.creds.delete(existingByUsername.id);
+        merged.id = existingByUsername.id;
+      }
+      this.creds.set(merged.id, merged);
       this.persist();
       return merged;
     }
@@ -55,6 +65,14 @@ export class CredentialStore {
     this.creds.set(id, newCred);
     this.persist();
     return newCred;
+  }
+
+  // v3.7.0 BUG-20: Find existing credential by username + scope to merge variants
+  private findByUsername(username: string, scope: CredentialScope): Credential | undefined {
+    for (const cred of this.creds.values()) {
+      if (cred.username === username && cred.scope === scope) return cred;
+    }
+    return undefined;
   }
 
   query(filters: {

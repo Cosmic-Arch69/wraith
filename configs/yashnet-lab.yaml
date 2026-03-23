@@ -22,6 +22,13 @@ target:
 engagement:
   type: internal
   network_interface: "eth0"  # B6: Kali interface for Responder (eth0 on Parallels/Docker)
+  authorization:
+    tester_name: "Jaswanth Reddy Gorantla"
+    tester_role: "graduate cybersecurity student"
+    infrastructure: "Proxmox homelab on Dell PowerEdge (10.0.0.31)"
+    environment: "Isolated VLANs -- no internet-facing production systems"
+    purpose: "Security education, SOAR validation, detection engineering coursework"
+    monitoring: "Wazuh SIEM actively monitoring all activity for defensive analysis"
 
 attack:
   randomize: true         # random target selection + timing

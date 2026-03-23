@@ -172,6 +172,17 @@ export class Evaluator {
       case 'success':
         graph.updateNode(ip, { status: 'up' });
         delta.nodes_updated.push(ip);
+        // v3.7.0 BUG-18: Update hostname if node currently uses IP as hostname
+        {
+          const currentNode = graph.queryNode(ip);
+          if (currentNode && currentNode.host === ip && attack.details) {
+            const hostnameMatch = attack.details.match(/hostname[:\s]+([A-Za-z0-9_.-]+)/i) ??
+                                  attack.details.match(/\b(pfSense|DC\d|Win\d+PC\d+|[A-Z][A-Z0-9-]+\.[a-z]+)\b/);
+            if (hostnameMatch) {
+              graph.updateNode(ip, { host: hostnameMatch[1] } as Partial<import('../types/index.js').AttackGraphNode>);
+            }
+          }
+        }
         // v3.2.0 BUG-20: Recognize SYSTEM/admin access from ANY phase (including recon)
         if (attack.details) {
           const detailsLower = attack.details.toLowerCase();
@@ -274,14 +285,19 @@ export class Evaluator {
         }
 
         // v3.3.0 BUG-24: Detect web admin credentials in evidence
+        // v3.7.0 BUG-21: Only annotate the specific target node, not any IP found in content
         if (/\badmin\b/i.test(content) && (/\bcracked\b/i.test(content) || /\bpassword\b/i.test(content))) {
-          const ipMatch = content.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/);
+          // Use the agent's target IP from the result, not arbitrary IPs from content
+          const targetIp = result.agent_id.split('-').pop() ?? '';
+          const ipMatch = targetIp.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/) ??
+                          content.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/);
           if (ipMatch) {
             const node = graph.queryNode(ipMatch[1]);
             if (node && node.access_level === 'none') {
               graph.updateNode(ipMatch[1], { access_level: 'user' });
               delta.access_levels_changed.push({ ip: ipMatch[1], from: 'none', to: 'user' });
             }
+            // Only annotate this specific node
             graph.updateNode(ipMatch[1], { notes: ['[evaluator] Web admin credential discovered'] });
           }
         }

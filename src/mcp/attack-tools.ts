@@ -3,6 +3,14 @@
 // This eliminates the refusal surface: the LLM never composes offensive shell strings.
 
 import { execSync } from 'node:child_process';
+import { ScopeEnforcer } from '../services/scope-enforcer.js';
+
+// v3.7.0: Scope enforcer -- initialized from env when MCP server starts
+let scopeEnforcer: ScopeEnforcer | null = null;
+function getScope(): ScopeEnforcer | null {
+  if (!scopeEnforcer) scopeEnforcer = ScopeEnforcer.fromEnv();
+  return scopeEnforcer;
+}
 
 // ── Shared execution helper ─────────────────────────────────────────────────
 
@@ -436,6 +444,16 @@ export const ATTACK_TOOL_NAMES: string[] = ATTACK_TOOLS.map(t => t.name);
 
 export function handleAttackTool(name: string, input: Record<string, unknown>): string {
   const timeout = (input.timeout_sec as number) ?? 120;
+
+  // v3.7.0: Scope enforcement -- validate target before any attack tool executes
+  const scope = getScope();
+  if (scope) {
+    const target = (input.target as string) ?? (input.target_url as string) ?? '';
+    const ip = target.replace(/^https?:\/\//, '').split(/[:/]/)[0];
+    if (ip && !scope.isInScope(ip)) {
+      return `SCOPE VIOLATION: Target ${ip} is not in the authorized scope. Authorized targets: ${scope.getAuthorizedList().join(', ')}. Aborting ${name}.`;
+    }
+  }
 
   switch (name) {
 

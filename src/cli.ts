@@ -16,6 +16,7 @@ export interface CliArgs {
   maxRounds?: number;
   maxAgents?: number;
   objective?: string;
+  skipPreflight: boolean;  // v3.7.0: skip pre-engagement checks
 }
 
 export function parseCli(): CliArgs {
@@ -34,6 +35,7 @@ export function parseCli(): CliArgs {
       'max-rounds': { type: 'string' },
       'max-agents': { type: 'string' },
       objective:   { type: 'string',  short: 'o' },
+      'skip-preflight': { type: 'boolean', default: false },
     },
     strict: false,
   });
@@ -49,12 +51,13 @@ export function parseCli(): CliArgs {
     maxRounds: values['max-rounds'] ? parseInt(values['max-rounds'] as string, 10) : undefined,
     maxAgents: values['max-agents'] ? parseInt(values['max-agents'] as string, 10) : undefined,
     objective: values.objective as string | undefined,
+    skipPreflight: values['skip-preflight'] as boolean,
   };
 }
 
 export function printUsage() {
   console.log(`
-  Wraith v3.0.0 -- Autonomous AI Pentesting Framework
+  Wraith v3.7.0 -- Autonomous AI Pentesting Framework
 
   Usage:
     wraith run   [--config <path>] [--dry-run]   Start adaptive pipeline

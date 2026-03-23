@@ -8,6 +8,14 @@ import type { AttackEvent } from '../types/index.js';
 import { CRED_TOOLS, handleCredTool } from './cred-tools.js';
 import { GRAPH_TOOLS, handleGraphTool } from './graph-tools.js';
 import { ATTACK_TOOLS, handleAttackTool, ATTACK_TOOL_NAMES } from './attack-tools.js';
+import { ScopeEnforcer, extractIpsFromCommand } from '../services/scope-enforcer.js';
+
+// v3.7.0: Scope enforcer for execute_command (best-effort IP extraction)
+let scopeEnforcer: ScopeEnforcer | null = null;
+function getScope(): ScopeEnforcer | null {
+  if (!scopeEnforcer) scopeEnforcer = ScopeEnforcer.fromEnv();
+  return scopeEnforcer;
+}
 
 const CORE_PENTEST_TOOLS = [
   {
@@ -184,6 +192,17 @@ export function handleTool(name: string, input: Record<string, unknown>): string
     case 'execute_command': {
       const cmd = input.command as string;
       let timeout = ((input.timeout_sec as number) ?? 60) * 1000;
+
+      // v3.7.0: Best-effort scope check on execute_command
+      const scope = getScope();
+      if (scope) {
+        const ips = extractIpsFromCommand(cmd);
+        for (const ip of ips) {
+          if (!scope.isInScope(ip)) {
+            return `SCOPE VIOLATION: Command targets ${ip} which is not in authorized scope. Authorized: ${scope.getAuthorizedList().join(', ')}`;
+          }
+        }
+      }
 
       // Bug 6: Cracking cap -- max 2 concurrent john/hashcat processes
       if (/\b(john|hashcat)\b/.test(cmd)) {

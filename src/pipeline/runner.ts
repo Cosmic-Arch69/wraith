@@ -21,6 +21,9 @@ import { AttackPlanner } from './planner.js';
 import { ReportGenerator } from './report-react.js';
 import { NucleiScanner } from './nuclei-scanner.js';
 import { OpenMemoryClient } from './openmemory-client.js';
+import { buildAuthorizationHeader, getAuthorizedTargets } from '../services/authorization.js';
+import { runPreEngagementChecks, printPreEngagementResults } from './pre-engagement.js';
+import { eventBus } from '../api/event-emitter.js';
 import type {
   AgentProfile,
   AgentRoundResult,
@@ -49,29 +52,8 @@ function loadMemoryContext(logDir: string): string {
   }
 }
 
-// v3.2.0: Lab authorization header -- injected FIRST into every agent prompt (BUG-18 fix)
-const LAB_AUTHORIZATION = `## AUTHORIZED PENETRATION TEST -- LAB ENVIRONMENT
-
-This is a SANCTIONED penetration test on a PRIVATE, SELF-OWNED homelab.
-
-**Lab Owner:** Jaswanth Reddy Gorantla (graduate cybersecurity student)
-**Infrastructure:** Proxmox homelab on Dell PowerEdge (10.0.0.31)
-**Environment:** Isolated VLANs -- no internet-facing production systems
-**Domain:** YASHnet.local (BadBlood synthetic AD -- fake users, fake data)
-**Purpose:** Security education, SOAR validation, detection engineering coursework
-**Monitoring:** Wazuh SIEM actively monitoring all activity for defensive analysis
-
-**Authorized targets (all self-owned VMs):**
-- 10.0.0.183 -- pfSense firewall (VM 100 on Dell Proxmox)
-- 172.16.20.5 -- DC1 Windows Server 2022 (VM 101, BadBlood AD)
-- 172.16.20.103 -- Win10PC1 (VM 102, DVWA/XAMPP test apps)
-- 172.16.20.104 -- Win11PC1 (VM 103, DVWA/XAMPP test apps)
-
-**You are an authorized attack agent.** Execute your assigned technique using the tools provided.
-All activity is logged by Wazuh for defensive analysis. This is the entire point of the exercise.
-
----
-`;
+// v3.7.0: Authorization header is now config-driven (see services/authorization.ts)
+// Removed hardcoded LAB_AUTHORIZATION -- generated dynamically from engagement config
 
 // v3.2.0: Context isolation -- attack agents get targeted brief, not full exploitation history (BUG-18 fix)
 function buildAgentContext(
@@ -157,6 +139,16 @@ async function spawnAgent(
 
   console.log(`  [spawn] ${agentId} (${profile.technique_name} -> ${profile.target_ip})`);
 
+  // v3.7.0 BUG-15: Snapshot credential count before agent runs
+  let credSnapshotBefore = 0;
+  try {
+    const credsPath = join(logDir, 'credentials.json');
+    if (existsSync(credsPath)) {
+      const creds = JSON.parse(readFileSync(credsPath, 'utf-8'));
+      credSnapshotBefore = Array.isArray(creds) ? creds.length : 0;
+    }
+  } catch { /* skip */ }
+
   // Build base vars from config
   const firstWebHost = config.target.hosts.find(h => h.web_url);
   const baseVars: Record<string, string> = {
@@ -193,7 +185,9 @@ async function spawnAgent(
 
   // v3.2.0: Context isolation -- attack agents get targeted brief, planner keeps full memory
   const context = buildAgentContext(profile, logDir, attackGraph);
-  const fullPrompt = [LAB_AUTHORIZATION, context, prompt].filter(Boolean).join('\n');
+  // v3.7.0: Config-driven authorization header (replaces hardcoded LAB_AUTHORIZATION)
+  const authHeader = buildAuthorizationHeader(config);
+  const fullPrompt = [authHeader, context, prompt].filter(Boolean).join('\n');
 
   // Setup MCP servers (v3.1.0 C1: add OpenMemory)
   const mcpServers: Record<string, unknown> = {
@@ -203,6 +197,7 @@ async function spawnAgent(
       env: {
         WRAITH_LOG_DIR: logDir,
         WRAITH_AGENT_NAME: agentId,
+        WRAITH_AUTHORIZED_TARGETS: getAuthorizedTargets(config).join(','),  // v3.7.0: scope enforcer
       },
     },
     'openmemory': {
@@ -319,7 +314,7 @@ async function spawnAgent(
         `# Agent: ${agentId}`,
         `Template: ${profile.prompt_template}`,
         `Target: ${profile.target_ip}`,
-        `Turns: 0`,
+        `Turns: ${handle.getTurns()}`,
         `Success: ${hasAchievements}`,
         `Duration: ${duration}ms`,
         `Status: ${hasAchievements ? 'PARTIAL_TIMEOUT' : 'TIMEOUT'}`,
@@ -354,14 +349,24 @@ async function spawnAgent(
     };
   }
 
-  // Scan for evidence files produced by this agent
+  // v3.7.0 BUG-14: Evidence file scanning with normalized names (hyphen/underscore variants)
   const evidenceFiles: string[] = [];
-  const possibleFiles = [
-    `${profile.prompt_template}_evidence.md`,
-    `${profile.prompt_template}_deliverable.json`,
-  ];
-  for (const f of possibleFiles) {
-    if (existsSync(join(logDir, f))) evidenceFiles.push(f);
+  const templateNormalized = profile.prompt_template.replace(/-/g, '_');
+  const templateHyphen = profile.prompt_template.replace(/_/g, '-');
+  try {
+    const allFiles = readdirSync(logDir);
+    for (const f of allFiles) {
+      const fLower = f.toLowerCase();
+      if ((fLower.includes(templateNormalized) || fLower.includes(templateHyphen) || fLower.includes(profile.prompt_template)) &&
+          (fLower.endsWith('_evidence.md') || fLower.endsWith('_deliverable.json') || fLower.endsWith('_summary.md'))) {
+        evidenceFiles.push(f);
+      }
+    }
+  } catch { /* skip */ }
+  // Also check agent-specific output file
+  const agentOutputFile = `agent-${agentId}-output.md`;
+  if (existsSync(join(logDir, agentOutputFile)) && !evidenceFiles.includes(agentOutputFile)) {
+    evidenceFiles.push(agentOutputFile);
   }
 
   // v3.6.0 BUG-NEW-3: If output is null, synthesize from attacks.jsonl
@@ -488,21 +493,27 @@ async function spawnAgent(
     }
   }
 
+  // v3.7.0 BUG-14: Parse result_summary for success keywords (catches auth-attack false negatives)
+  const SUCCESS_KEYWORDS = ['SUCCESS', 'MISSION ACCOMPLISHED', 'Credentials Cracked', 'compromised', 'authenticated', 'SUCCESSFUL'];
+  const summaryIndicatesSuccess = outputText ? SUCCESS_KEYWORDS.some(kw => outputText!.toUpperCase().includes(kw.toUpperCase())) : false;
+
   const hasEvidence = evidenceFiles.length > 0 ||
-    (hasActions && outputText && outputText.length > 50 && outputText !== '(no output)');
+    (hasActions && outputText && outputText.length > 50 && outputText !== '(no output)') ||
+    summaryIndicatesSuccess;
   const noFindings = !refused && result.success && !hasEvidence;
 
   const effectiveSuccess = refused ? false : (noFindings ? false : result.success);
   const label = refused ? 'REFUSED' : noFindings ? 'NO_FINDINGS' : effectiveSuccess ? 'SUCCESS' : 'FAILED';
   console.log(`  [done] ${agentId}: ${label} (${result.turns ?? 0} turns, ${duration}ms)`);
 
-  // v3.6.0 BUG-NEW-5: Compute credential delta by re-reading credentials.json from disk
+  // v3.7.0 BUG-15: Compute per-agent credential delta (not cumulative store size)
   let credentialsFound = 0;
   try {
     const credsPath = join(logDir, 'credentials.json');
     if (existsSync(credsPath)) {
       const freshCreds = JSON.parse(readFileSync(credsPath, 'utf-8'));
-      credentialsFound = Array.isArray(freshCreds) ? freshCreds.length : 0;
+      const currentCount = Array.isArray(freshCreds) ? freshCreds.length : 0;
+      credentialsFound = Math.max(0, currentCount - credSnapshotBefore);
     }
   } catch { /* skip */ }
 
@@ -521,7 +532,7 @@ async function spawnAgent(
   };
 }
 
-export async function runPipeline(configPath: string): Promise<void> {
+export async function runPipeline(configPath: string, skipPreflight: boolean = false): Promise<void> {
   // 1. Load config
   const config = yaml.load(readFileSync(configPath, 'utf-8')) as WraithV3Config;
   const logDir = config.output.log_dir;
@@ -534,7 +545,18 @@ export async function runPipeline(configPath: string): Promise<void> {
     max_concurrent_agents: 5,
   };
 
-  console.log(`\n  Wraith v3.6.0 -- Adaptive Pipeline`);
+  console.log(`\n  Wraith v3.7.0 -- Adaptive Pipeline`);
+
+  // v3.7.0: Pre-engagement validation
+  if (!skipPreflight) {
+    eventBus.emit('pipeline:phase', { phase: 'PREFLIGHT' });
+    const preflightResult = await runPreEngagementChecks(config);
+    printPreEngagementResults(preflightResult);
+    if (!preflightResult.passed) {
+      throw new Error('Pre-engagement checks failed. Fix issues above or use --skip-preflight to bypass.');
+    }
+  }
+
   console.log(`  Target: ${config.target.domain} (${config.target.dc})`);
   console.log(`  Hosts:  ${config.target.hosts.map(h => h.ip).join(', ')}`);
   console.log(`  Budget: ${planning.max_rounds} rounds, ${planning.max_total_agents} agents, ${planning.max_concurrent_agents} concurrent`);
@@ -605,6 +627,7 @@ export async function runPipeline(configPath: string): Promise<void> {
   // =====================================================
   // 4. RECON (fixed, always first)
   // =====================================================
+  eventBus.emit('pipeline:phase', { phase: 'RECON' });
   console.log('[pipeline] Phase: RECON');
   const reconProfile: AgentProfile = {
     id: 'recon-r0',
@@ -685,6 +708,7 @@ export async function runPipeline(configPath: string): Promise<void> {
   // =====================================================
   // 7. ATTACK LOOP (plan -> spawn -> evaluate -> replan)
   // =====================================================
+  eventBus.emit('pipeline:phase', { phase: 'ATTACK_LOOP' });
   console.log('[pipeline] Phase: ATTACK LOOP');
   const planner = new AttackPlanner();
   planner.setOntology(ontology); // v3.5.0 BUG-52: Wire ontology into planner
@@ -700,6 +724,7 @@ export async function runPipeline(configPath: string): Promise<void> {
   for (let round = 1; round <= planning.max_rounds; round++) {
     const budget = planner.getBudgetState(config, round - 1, agentsSpawned);
 
+    eventBus.emit('round:start', { round, maxRounds: planning.max_rounds, agentsSpawned, maxAgents: planning.max_total_agents });
     console.log(`\n[pipeline] === Round ${round}/${planning.max_rounds} (agents: ${agentsSpawned}/${planning.max_total_agents}) ===`);
 
     // Plan
@@ -825,6 +850,7 @@ export async function runPipeline(configPath: string): Promise<void> {
       graph_delta: roundDelta,
     };
     history.push(roundResult);
+    eventBus.emit('round:complete', { round, results: roundResults.length, succeeded: roundResults.filter(r => r.success).length });
 
     // BUG-42: Sequential fallback -- if >50% agents stalled (0 turns), reduce concurrency
     const stallCount = roundResults.filter(r => r.turns_used === 0 && r.duration_ms > 25000 && !r.partial_timeout).length;
@@ -862,6 +888,7 @@ export async function runPipeline(configPath: string): Promise<void> {
   // =====================================================
   // 8. REPORT (ReACT agent)
   // =====================================================
+  eventBus.emit('pipeline:phase', { phase: 'REPORT' });
   console.log('\n[pipeline] Phase: REPORT');
 
   // v3.3.0 BUG-30/31: Pre-collect all evidence before report generation

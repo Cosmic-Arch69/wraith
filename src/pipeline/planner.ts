@@ -347,7 +347,7 @@ export class AttackPlanner {
     if (hasDomainCreds) {
       const kerberosHost = nodes.find(n =>
         n.services.some(s => s.includes('88') || s.includes('kerberos')) &&
-        n.status !== 'blocked',
+        n.status !== 'blocked' && n.soar_status !== 'blocked',
       );
       if (kerberosHost) {
         const combo = `kerberoast-${kerberosHost.ip}`;
@@ -375,9 +375,9 @@ export class AttackPlanner {
     }
 
     // Rule 2: Any creds + multiple hosts with SMB/WinRM -> lateral
-    if (creds.length > 0 && nodes.filter(n => n.status !== 'blocked').length > 1) {
+    if (creds.length > 0 && nodes.filter(n => n.status !== 'blocked' && n.soar_status !== 'blocked').length > 1) {
       const lateralTarget = nodes.find(n =>
-        n.status !== 'blocked' &&
+        n.status !== 'blocked' && n.soar_status !== 'blocked' &&
         n.services.some(s => s.includes('445') || s.includes('5985') || s.includes('smb') || s.includes('winrm')),
       );
       if (lateralTarget) {
@@ -409,7 +409,7 @@ export class AttackPlanner {
     if (hasAdminAccess) {
       const adminHost = nodes.find(n =>
         (n.access_level === 'admin' || n.access_level === 'system') &&
-        n.status !== 'blocked',
+        n.status !== 'blocked' && n.soar_status !== 'blocked',
       );
       if (adminHost) {
         const combo = `privesc-${adminHost.ip}`;
@@ -543,8 +543,10 @@ export class AttackPlanner {
 
   // v3.5.0 BUG-50: Compute failure streaks for planner context
   // v3.6.0 BUG-NEW-11: Hard block for template:target combos with 2+ consecutive 0-turn failures
+  // BUG-37: Also hard-block bruteforce/auth-attack with 3+ consecutive failures regardless of turn count
   private getHardBlockedCombos(history: RoundResult[]): Map<string, number> {
     const streaks = new Map<string, number>();
+    const bruteforceTemplates = new Set(['bruteforce', 'auth-attack']);
 
     for (const round of history) {
       for (const agent of round.agent_results) {
@@ -552,7 +554,10 @@ export class AttackPlanner {
         const target = agent.agent_id.split('-').slice(2).join('-');
         const key = `${template}:${target}`;
 
-        if (!agent.success && (agent.turns_used === 0 || agent.heartbeat_stalled)) {
+        const isBruteforceTemplate = bruteforceTemplates.has(template);
+        const isZeroTurnStall = agent.turns_used === 0 || agent.heartbeat_stalled;
+
+        if (!agent.success && (isZeroTurnStall || isBruteforceTemplate)) {
           streaks.set(key, (streaks.get(key) ?? 0) + 1);
         } else if (agent.success) {
           streaks.delete(key);
@@ -562,7 +567,9 @@ export class AttackPlanner {
 
     const blocked = new Map<string, number>();
     for (const [key, count] of streaks) {
-      if (count >= 2) blocked.set(key, count);
+      const template = key.split(':')[0];
+      const threshold = bruteforceTemplates.has(template) ? 3 : 2;
+      if (count >= threshold) blocked.set(key, count);
     }
     return blocked;
   }

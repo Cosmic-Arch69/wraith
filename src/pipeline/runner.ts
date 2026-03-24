@@ -24,6 +24,14 @@ import { OpenMemoryClient } from './openmemory-client.js';
 import { buildAuthorizationHeader, getAuthorizedTargets } from '../services/authorization.js';
 import { runPreEngagementChecks, printPreEngagementResults } from './pre-engagement.js';
 import { eventBus } from '../api/event-emitter.js';
+import {
+  getExternalModeVars,
+  getInternalModeVars,
+  getAssumedBreachVars,
+  hasPivotedPastFirewall,
+  seedAssumedBreach,
+} from './engagement-modes.js';
+import { startApiServer, type PipelineState } from '../api/server.js';
 import type {
   AgentProfile,
   AgentRoundResult,
@@ -138,6 +146,7 @@ async function spawnAgent(
   const agentId = profile.id;
 
   console.log(`  [spawn] ${agentId} (${profile.technique_name} -> ${profile.target_ip})`);
+  eventBus.emit('agent:spawn', { agentId, template: profile.prompt_template, targetIp: profile.target_ip, modelTier: profile.model_tier });
 
   // v3.7.0 BUG-15: Snapshot credential count before agent runs
   let credSnapshotBefore = 0;
@@ -149,25 +158,26 @@ async function spawnAgent(
     }
   } catch { /* skip */ }
 
-  // Build base vars from config
-  const firstWebHost = config.target.hosts.find(h => h.web_url);
+  // v3.8.0 BUG-25/26: Mode-aware base vars (external hides internal IPs until pivot)
+  const engType = config.engagement?.type ?? 'internal';
+  const graphSnapshot = attackGraph.getGraphSnapshot();
+  const pivoted = engType === 'external' ? hasPivotedPastFirewall(graphSnapshot) : false;
+
+  let modeVars: Record<string, string>;
+  if (engType === 'external' && !pivoted) {
+    modeVars = getExternalModeVars(config);
+  } else if (engType === 'assumed-breach') {
+    modeVars = getAssumedBreachVars(config);
+  } else {
+    modeVars = getInternalModeVars(config);
+  }
+
   const baseVars: Record<string, string> = {
-    domain: config.target.domain,
-    dc: config.target.dc,
-    hosts: JSON.stringify(config.target.hosts),
-    credentials: JSON.stringify(config.target.credentials),
+    ...modeVars,
     logDir,
     randomize: String(config.attack.randomize),
     delayMin: String(config.attack.delay_min_sec),
     delayMax: String(config.attack.delay_max_sec),
-    web_host: firstWebHost?.ip ?? '',
-    web_url: firstWebHost?.web_url ?? '',
-    domain_user: config.target.credentials.domain_user,
-    domain_pass: config.target.credentials.domain_pass,
-    web_dvwa_user: config.target.credentials.web_dvwa_user ?? 'admin',
-    web_dvwa_pass: config.target.credentials.web_dvwa_pass ?? 'password',
-    wan_ip: config.engagement?.wan_ip ?? '',
-    engagement_type: config.engagement?.type ?? 'internal',
   };
 
   // v3.1.0 A3: Inject discovered credentials into agent context
@@ -202,7 +212,7 @@ async function spawnAgent(
     },
     'openmemory': {
       type: 'http',
-      url: process.env.OPENMEMORY_URL ?? 'http://10.0.0.21:8080/mcp',
+      url: process.env.OPENMEMORY_URL ?? 'http://100.91.167.11:8080/mcp',
     },
   };
 
@@ -505,6 +515,7 @@ async function spawnAgent(
   const effectiveSuccess = refused ? false : (noFindings ? false : result.success);
   const label = refused ? 'REFUSED' : noFindings ? 'NO_FINDINGS' : effectiveSuccess ? 'SUCCESS' : 'FAILED';
   console.log(`  [done] ${agentId}: ${label} (${result.turns ?? 0} turns, ${duration}ms)`);
+  eventBus.emit('agent:complete', { agentId, success: effectiveSuccess, label, turns: result.turns ?? 0, durationMs: duration });
 
   // v3.7.0 BUG-15: Compute per-agent credential delta (not cumulative store size)
   let credentialsFound = 0;
@@ -545,7 +556,21 @@ export async function runPipeline(configPath: string, skipPreflight: boolean = f
     max_concurrent_agents: 5,
   };
 
-  console.log(`\n  Wraith v3.7.0 -- Adaptive Pipeline`);
+  console.log(`\n  Wraith v3.8.0 -- Adaptive Pipeline`);
+
+  // v3.8.0: Start Console API server
+  const apiPort = parseInt(process.env.WRAITH_API_PORT ?? '3001', 10);
+  const pipelineState: PipelineState = {
+    version: '3.8.0',
+    phase: 'initializing',
+    currentRound: 0,
+    maxRounds: planning.max_rounds,
+    agentsSpawned: 0,
+    maxAgents: planning.max_total_agents,
+    startedAt: new Date().toISOString(),
+    config: { domain: config.target.domain, engagement: config.engagement?.type ?? 'internal' },
+  };
+  const apiServer = startApiServer(logDir, apiPort, pipelineState);
 
   // v3.7.0: Pre-engagement validation
   if (!skipPreflight) {
@@ -597,6 +622,12 @@ export async function runPipeline(configPath: string, skipPreflight: boolean = f
     attackGraph.initNode(config.target.dc, 'DC');
   }
 
+  // v3.8.0 BUG-29: Seed assumed-breach mode (skip recon later)
+  if (config.engagement?.type === 'assumed-breach') {
+    seedAssumedBreach(config, attackGraph);
+    console.log('[pipeline] Assumed-breach: graph seeded with user-level access on all hosts');
+  }
+
   // 3. Start Responder (if internal engagement)
   const networkInterface = config.engagement?.network_interface ?? 'eth0';
   const responderManager = new ResponderManager(logDir);
@@ -625,9 +656,13 @@ export async function runPipeline(configPath: string, skipPreflight: boolean = f
   ].join('\n'));
 
   // =====================================================
-  // 4. RECON (fixed, always first)
+  // 4. RECON (skip for assumed-breach)
   // =====================================================
+  const isAssumedBreach = config.engagement?.type === 'assumed-breach';
   eventBus.emit('pipeline:phase', { phase: 'RECON' });
+  if (isAssumedBreach) {
+    console.log('[pipeline] Phase: RECON -- SKIPPED (assumed-breach mode)');
+  } else {
   console.log('[pipeline] Phase: RECON');
   const reconProfile: AgentProfile = {
     id: 'recon-r0',
@@ -683,6 +718,7 @@ export async function runPipeline(configPath: string, skipPreflight: boolean = f
   }
   const nucleiFindings = await nuclei.scan(targetURLs, logDir, attackGraph);
   console.log(`[pipeline] Nuclei: ${nucleiFindings} findings across ${targetURLs.length} targets`);
+  } // end of recon/nuclei skip for assumed-breach
 
   // =====================================================
   // 5. ONTOLOGY (LLM generates schema from recon)
@@ -817,6 +853,7 @@ export async function runPipeline(configPath: string, skipPreflight: boolean = f
         // Evaluate result and update graph
         const delta = evaluator.evaluate(agentResult, logDir, attackGraph, credStore);
         roundResults.push(agentResult);
+        eventBus.emit('graph:update', { round, agentId: agentResult.agent_id, delta });
 
         // BUG-49: Harvest credentials immediately so next agents in batch can use them
         evaluator.harvestCredentials(logDir);
@@ -913,10 +950,12 @@ export async function runPipeline(configPath: string, skipPreflight: boolean = f
   // 9. Cleanup
   potWatcher.stop();
   responderManager.stop();
+  apiServer.close();
 
   const totalSucceeded = history.reduce((s, r) => s + r.agent_results.filter(a => a.success).length, 0);
   const totalFailed = history.reduce((s, r) => s + r.agent_results.filter(a => !a.success).length, 0);
 
+  eventBus.emit('pipeline:complete', { rounds: history.length, agentsSpawned, totalSucceeded, totalFailed });
   console.log(`\n  Wraith v3 complete.`);
   console.log(`  Rounds: ${history.length} | Agents: ${agentsSpawned} (${totalSucceeded} succeeded, ${totalFailed} failed)`);
   console.log(`  Report: ${logDir}/pentest_report.md\n`);

@@ -4,6 +4,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Credential, CredentialScope } from '../types/index.js';
+import { eventBus } from '../api/event-emitter.js';
 
 function makeId(username: string, password?: string, hash?: string): string {
   return Buffer.from(username + (password ?? hash ?? '')).toString('base64').slice(0, 16);
@@ -64,6 +65,7 @@ export class CredentialStore {
     };
     this.creds.set(id, newCred);
     this.persist();
+    eventBus.emit('credential:discovered', { username: newCred.username, scope: newCred.scope, source: newCred.source });
     return newCred;
   }
 

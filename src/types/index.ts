@@ -14,7 +14,7 @@ export type AgentName =
 
 export type ModelTier = 'small' | 'medium' | 'large';
 
-export type AttackResult = 'success' | 'failed' | 'blocked' | 'skipped';
+export type AttackResult = 'success' | 'failed' | 'blocked' | 'skipped' | 'pending';
 
 export type EngagementType = 'external' | 'internal' | 'assumed-breach';
 

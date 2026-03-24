@@ -26,7 +26,7 @@ interface AttackLogEntry {
   technique: string;
   techniqueName: string;
   target: { ip: string; user?: string; service?: string; url?: string };
-  result: 'success' | 'failed' | 'blocked' | 'skipped';
+  result: 'success' | 'failed' | 'blocked' | 'skipped' | 'pending';
   tool: string;
   details: string;
 }
@@ -166,7 +166,8 @@ export class Evaluator {
     if (!ip || ip === 'N/A' || ip === 'broadcast') return;
 
     // Ensure node exists
-    graph.initNode(ip, ip);
+    const isNew = graph.initNode(ip, ip);
+    if (isNew) delta.nodes_added.push(ip);
 
     switch (attack.result) {
       case 'success':
@@ -208,9 +209,14 @@ export class Evaluator {
         if (attack.phase === 'privesc' || attack.technique.startsWith('T1068')) {
           const node = graph.queryNode(ip);
           const currentLevel = node?.access_level ?? 'none';
-          if (isAccessUpgrade(currentLevel, 'admin')) {
-            graph.updateNode(ip, { access_level: 'admin' });
-            delta.access_levels_changed.push({ ip, from: currentLevel, to: 'admin' });
+          // BUG-34: Promote to system if SYSTEM-level indicators present in details
+          const SYSTEM_INDICATORS = ['system', 'nt authority', 'nt authority\\system', 'root', 'secretsdump', 'dcsync', 'sam hashes', 'domain admin'];
+          const detailsLower = attack.details?.toLowerCase() ?? '';
+          const isSystemLevel = SYSTEM_INDICATORS.some(indicator => detailsLower.includes(indicator));
+          const targetLevel = isSystemLevel ? 'system' : 'admin';
+          if (isAccessUpgrade(currentLevel, targetLevel)) {
+            graph.updateNode(ip, { access_level: targetLevel });
+            delta.access_levels_changed.push({ ip, from: currentLevel, to: targetLevel });
           }
         }
         break;
@@ -244,6 +250,14 @@ export class Evaluator {
             delta.vectors_closed.push(`${ip}:${vectorName}`);
           }
         }
+        break;
+
+      case 'skipped':
+        // BUG-32: Skipped events should not count as failures -- no action
+        break;
+
+      case 'pending':
+        // BUG-33: In-progress intent events -- skip until resolved
         break;
     }
   }

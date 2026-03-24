@@ -92,14 +92,16 @@ function checkConnectivity(config: WraithV3Config): PreEngagementCheck[] {
 }
 
 function checkToolAvailability(): PreEngagementCheck {
-  const required = ['nmap', 'sqlmap', 'hydra', 'john', 'nuclei', 'crackmapexec'];
+  const required = ['nmap', 'sqlmap', 'hydra', 'john', 'nuclei', 'nxc'];
   const optional = ['hashcat', 'kerbrute', 'bloodhound-python', 'smbclient', 'rpcclient', 'ldapsearch'];
   const missing: string[] = [];
   const missingOptional: string[] = [];
 
+  const expandedEnv = { ...process.env, PATH: `${process.env.HOME}/.local/bin:${process.env.PATH}` };
+
   for (const tool of required) {
     try {
-      execSync(`which ${tool} 2>/dev/null`, { timeout: 5000, encoding: 'utf-8' });
+      execSync(`which ${tool} 2>/dev/null`, { timeout: 5000, encoding: 'utf-8', env: expandedEnv });
     } catch {
       missing.push(tool);
     }
@@ -107,7 +109,7 @@ function checkToolAvailability(): PreEngagementCheck {
 
   for (const tool of optional) {
     try {
-      execSync(`which ${tool} 2>/dev/null`, { timeout: 5000, encoding: 'utf-8' });
+      execSync(`which ${tool} 2>/dev/null`, { timeout: 5000, encoding: 'utf-8', env: expandedEnv });
     } catch {
       missingOptional.push(tool);
     }

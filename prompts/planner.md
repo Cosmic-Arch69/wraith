@@ -136,6 +136,7 @@ Return ONLY a JSON object matching this schema (no markdown fences, no explanati
 - For lateral movement, check that at least one cracked credential exists.
 - For privilege escalation, check that user-level access exists on the target.
 - NEVER spawn a 'report' template agent. The pipeline generates the report automatically after the attack loop ends. Any 'report' agents will be filtered out.
+- Post-pivot rebalancing: After a successful pivot reveals internal hosts, shift 70%+ of new agents to internal targets (DCs, workstations). Only dispatch 1-2 agents to the WAN/perimeter per round post-pivot.
 
 ## Template Selection Guide
 

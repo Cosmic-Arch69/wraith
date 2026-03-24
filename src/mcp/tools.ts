@@ -9,6 +9,7 @@ import { CRED_TOOLS, handleCredTool } from './cred-tools.js';
 import { GRAPH_TOOLS, handleGraphTool } from './graph-tools.js';
 import { ATTACK_TOOLS, handleAttackTool, ATTACK_TOOL_NAMES } from './attack-tools.js';
 import { ScopeEnforcer, extractIpsFromCommand } from '../services/scope-enforcer.js';
+import { eventBus } from '../api/event-emitter.js';
 
 // v3.7.0: Scope enforcer for execute_command (best-effort IP extraction)
 let scopeEnforcer: ScopeEnforcer | null = null;
@@ -44,7 +45,7 @@ const CORE_PENTEST_TOOLS = [
         targetService: { type: 'string' },
         targetUrl: { type: 'string' },
         tool: { type: 'string' },
-        result: { type: 'string', enum: ['success', 'failed', 'blocked', 'skipped'] },
+        result: { type: 'string', enum: ['success', 'failed', 'blocked', 'skipped', 'pending'] },
         wazuhRuleExpected: { type: 'string' },
         details: { type: 'string' },
       },
@@ -256,6 +257,7 @@ export function handleTool(name: string, input: Record<string, unknown>): string
         details: input.details as string,
       };
       appendFileSync(ATTACK_LOG, JSON.stringify(event) + '\n');
+      eventBus.emit('attack:logged', event);
       return `Logged: ${event.technique} -> ${event.result}`;
     }
 
@@ -393,7 +395,7 @@ export function handleTool(name: string, input: Record<string, unknown>): string
         target: { ip: targetIp },
         sourceIp: getSourceIp(),
         tool,
-        result: 'failed',  // placeholder -- will be updated by agent after actual attempt
+        result: 'pending',  // placeholder -- will be updated by agent after actual attempt
         wazuhRuleExpected: wazuhRule,
         details: `ATTEMPTING: ${techniqueName} against ${targetIp}`,
       };

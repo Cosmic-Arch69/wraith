@@ -41,8 +41,8 @@ export class AttackGraphService {
     this.persist();
   }
 
-  initNode(ip: string, host: string): void {
-    if (this.graph.nodes[ip]) return;
+  initNode(ip: string, host: string): boolean {
+    if (this.graph.nodes[ip]) return false;
     this.graph.nodes[ip] = {
       host,
       ip,
@@ -56,6 +56,7 @@ export class AttackGraphService {
       notes: [],
     };
     this.persist();
+    return true;
   }
 
   updateNode(ip: string, updates: Partial<AttackGraphNode>): void {
